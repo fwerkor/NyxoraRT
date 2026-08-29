@@ -24,11 +24,12 @@ The initial framework already provides:
 - buffered and identity-mapped native guest memory with W^X transitions during loading/relocation;
 - guarded guest stacks plus an x86-64 entry trampoline that switches `RSP`/`RBP` and presents SysV guest arguments on Linux, macOS x86-64, and Windows x64;
 - per-thread PT_TLS images with original alignment, initialized bytes, zeroed TLS BSS, a 0x40-byte guest TCB/DTV model, and scoped runtime thread context;
-- Linux x86-64 guest TCB binding through GS, with restoration on exit; FS-based guest TCB instructions still require an explicit FS->GS rewrite stage before unmodified binaries can use this path;
+- decoded x86-64 TCB patching using pinned Zydis 4.1.1: Linux rewrites supported `FS:[TCB]` accesses to GS, while Windows maps `FS:[0]` to an inline Win32 TLS slot in the TEB; unsupported TCB access forms fail loading instead of running with incorrect host TLS semantics;
 - callable late-import thunks backed by immutable RX code and separate RW target/counter slots; unresolved calls are counted and later bindings update stale thunk pointers without rewriting code;
 - a first `libkernel` HLE slice for process-time counters/frequency and current-CPU queries, registered through the same version-aware symbol path as guest exports;
 - `Runtime::invoke_entry()` as a synchronous end-to-end path from a native-backed loaded module through guest stack/thread context to native entry execution;
-- POSIX guest fault capture for SIGSEGV/SIGBUS/SIGILL with host-handler chaining, plus `GuestThread`/`Runtime::start_thread()` for independent guest stack/TLS/TCB execution and joinable results;
+- POSIX guest fault capture for SIGSEGV/SIGBUS/SIGILL and Windows x64 vectored-exception recovery, both returning through the native entry recovery epilogue;
+- `GuestThread`/`Runtime::start_thread()` plus a runtime-owned thread manager, with initial `pthread_create`/`pthread_join` HLE for `libkernel` and `libScePosix`;
 - a bounds-checked PM4 packet frontend, GPU submission/timeline interface, and deterministic null backend;
 - unit tests and CI-ready CMake/CTest targets.
 
@@ -46,9 +47,9 @@ To inspect a legal, unencrypted x86-64 ELF test image:
 
 ## Near-term roadmap
 
-1. Safe FS-TCB instruction rewriting to the host-specific guest-TCB path; add Windows TCB access rewriting and VEH-backed guest fault capture.
-2. Expand `libkernel` HLE into memory, files, synchronization, sleep/time, and map pthread APIs onto the new `GuestThread` lifecycle.
-3. Module lifecycle: dependency loading, init/fini arrays, process parameters, and runtime-owned guest-thread tracking.
+1. Extend Windows TCB rewriting beyond `FS:[0]` with explicit trampolines, and add remaining pthread basics such as attributes, detach, self, and exit.
+2. Expand `libkernel` HLE into memory, files, synchronization, and sleep/time.
+3. Module lifecycle: dependency loading, init/fini arrays, process parameters, and richer runtime-owned thread tracking.
 4. PM4 command processor with deterministic tracing and state tracking.
 5. Shader frontend -> typed IR -> SPIR-V backend and persistent shader/pipeline cache.
 6. Vulkan resource tracking, synchronization, presentation, and performance tooling.

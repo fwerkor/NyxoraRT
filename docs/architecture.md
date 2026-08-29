@@ -46,15 +46,18 @@ The native-memory path can load and relocate a synthetic SCE image, build a guar
 
 PT_TLS templates are registered per loaded module. Each guest thread receives its own aligned copy of initialized TLS bytes plus zeroed TLS BSS and a 0x40-byte TCB whose DTV uses the guest module identifiers assigned by the linker. Moving a thread context explicitly rebinds the TCB self/DTV pointers so the ABI structure cannot retain stale host addresses.
 
-On Linux x86-64, a scoped segment binding places the guest TCB at GS while leaving the host FS base untouched. This is intentionally only half of the native TLS path: target binaries use FS for TCB access, so known FS-based TCB instructions must be decoded and rewritten to GS before unmodified binaries can use the binding. NyxoraRT does not perform blind byte replacement because an 0x64 byte inside an immediate or displacement is not an FS prefix. Windows and macOS require separate code-side/LDT strategies rather than changing the host TLS register generically.
+Executable file-backed segments are decoded with pinned Zydis 4.1.1 before final RX protection. NyxoraRT only recognizes the narrow TCB forms currently needed by the ABI: 64-bit `MOV`, `CMP`, or `XOR` from `FS:[disp]` with no base/index and a displacement inside the TCB. This avoids blind byte replacement: a literal `0x64` inside an immediate or displacement is never mistaken for an FS prefix. Decode failures advance conservatively by one byte so mixed code/data executable segments can still be inspected. A recognized form that cannot be represented safely on the current host is a load-time error rather than an implicit compatibility guess.
 
-POSIX native execution installs process-level SIGSEGV/SIGBUS/SIGILL handlers once, but capture is thread-local and active only around guest invocation. A guest fault records its native signal, fault address, and instruction pointer; faults outside an active guest invocation are chained to the previously installed host handler. `GuestThread` composes an independent guest stack, TLS/TCB context, segment scope, entry trampoline, and captured result on a real host thread.
+On Linux x86-64, supported guest FS accesses are rewritten to GS and a scoped segment binding places the guest TCB at the GS base while leaving host FS untouched. On Windows x64, the runtime reserves one of the first 64 Win32 TLS slots and rewrites guest `FS:[0]` to the corresponding `GS:[TEB.TlsSlots+n]` address. That yields the TCB self pointer without replacing Windows' GS-based host TLS. Nonzero Windows TCB offsets remain intentionally unsupported until a trampoline-based rewrite is added.
+
+POSIX x86-64 native execution installs process-level SIGSEGV/SIGBUS/SIGILL handlers once, while Windows x64 installs a vectored exception handler. Capture state is thread-local and only active around native guest invocation. Both paths record the fault address and instruction pointer, rewrite the native exception context to the entry trampoline's saved host stack/recovery epilogue, and return through normal register restoration. POSIX faults outside an active guest invocation are chained to the previous handler; Windows returns `EXCEPTION_CONTINUE_SEARCH`.
+
+`GuestThread` composes an independent guest stack, TLS/TCB context, segment scope, entry trampoline, and captured result on a real host thread. `GuestThreadManager` owns opaque guest thread handles per runtime and is propagated through a thread-local scope so a child guest thread can create another thread without a process-global runtime singleton. Initial `pthread_create` and `pthread_join` HLE bindings are registered for both `libkernel` and `libScePosix`; attributes are deliberately limited to the null/default case for now. Windows HLE calls use one generated SysV-to-MS-x64 bridge that remaps the first four integer/pointer arguments, rather than per-function bridge implementations.
 
 The next native-execution work is:
 
-- decode and rewrite guest FS-TCB accesses to the platform-specific TCB mechanism;
-- Windows VEH-backed guest fault capture;
-- map libkernel pthread creation/join onto `GuestThread` and add runtime thread tracking;
+- trampoline-based Windows rewrites for nonzero TCB offsets;
+- pthread attributes, detach, self, exit, cancellation basics, and stronger thread-state diagnostics;
 - Windows host-call stack switching for HLE functions that may probe or consume substantial stack;
 - a narrow fallback mechanism for instructions or behaviors that cannot execute directly.
 

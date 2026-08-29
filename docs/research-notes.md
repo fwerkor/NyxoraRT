@@ -56,3 +56,7 @@ The memory layer now has an identity-mapped native arena in addition to determin
 Further study of the public reference implementations reinforced three design choices. First, guest-stack switching is a runtime concern independent of ELF parsing. Second, x86-64 console TLS should not be modeled by overwriting the host process TLS model; NyxoraRT now keeps explicit per-thread PT_TLS images while segment-base binding remains a separate next step. Third, unresolved callable imports benefit from stable tail-jump thunks whose writable target state is separated from executable code.
 
 NyxoraRT now has its own generated x86-64 entry trampoline, guarded guest stacks, per-thread TLS images, stable late-import thunks, and an initial `libkernel` HLE registry. Reference projects were used to establish public ABI/format facts and NID/version metadata; the implementation remains independent and no GPL source is incorporated.
+
+## Zydis
+
+NyxoraRT uses upstream Zydis 4.1.1 (MIT) as the instruction-decoding boundary for CPU compatibility patches. The dependency is pinned to an exact upstream revision. It is used to establish instruction boundaries and operand semantics before modifying segment prefixes; NyxoraRT does not incorporate GPL patching code from the emulator references.
