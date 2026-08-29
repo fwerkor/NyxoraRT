@@ -44,4 +44,6 @@ private:
     const EntryTrampoline& trampoline, GuestAddress entry, GuestAddress stack_top,
     std::uint64_t arg0 = 0, std::uint64_t arg1 = 0, std::uint64_t arg2 = 0);
 
+[[noreturn]] void terminate_guest_execution(std::uint64_t value) noexcept;
+
 } // namespace nyxora::runtime

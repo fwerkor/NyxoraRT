@@ -1,4 +1,5 @@
 #include "nyxora/runtime/thread_manager.hpp"
+#include "nyxora/runtime/kernel_services.hpp"
 
 #include <new>
 #include <system_error>
@@ -24,8 +25,22 @@ GuestThreadManager::~GuestThreadManager() {
 int GuestThreadManager::create(GuestAddress* handle_out, GuestAddress attributes,
                                GuestAddress start_routine, GuestAddress argument,
                                GuestSize stack_size) {
-    if (handle_out == nullptr || start_routine == 0 || attributes != 0) {
+    if (handle_out == nullptr || start_routine == 0) {
         return kPosixEinval;
+    }
+
+    bool detached = false;
+    if (attributes != 0) {
+        if (kernel_services_ == nullptr) {
+            return kPosixEinval;
+        }
+        KernelServices::ThreadAttributes resolved;
+        const auto result = kernel_services_->thread_attr_snapshot(attributes, resolved);
+        if (result != 0) {
+            return result;
+        }
+        stack_size = resolved.stack_size;
+        detached = resolved.detached;
     }
 
     std::unique_ptr<Record> record;
@@ -63,6 +78,7 @@ int GuestThreadManager::create(GuestAddress* handle_out, GuestAddress attributes
     }
 
     it->second->thread.emplace(std::move(*thread));
+    it->second->detached = detached;
     lock.unlock();
     *handle_out = handle;
     return 0;

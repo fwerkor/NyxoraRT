@@ -1,6 +1,7 @@
 #include "nyxora/runtime/fault.hpp"
 
 #include <cstdlib>
+#include <exception>
 #include <sstream>
 #include <string>
 
@@ -10,6 +11,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <intrin.h>
 #include <mutex>
 #elif defined(__x86_64__)
 #include <array>
@@ -31,6 +33,8 @@ struct ActiveCapture {
     GuestFault* fault{};
     EntryRecoveryState* recovery{};
     GuestAddress recovery_address{};
+    bool exit_requested{};
+    std::uint64_t exit_value{};
 };
 
 std::once_flag install_once;
@@ -55,6 +59,11 @@ LONG CALLBACK guest_vectored_handler(EXCEPTION_POINTERS* pointers) noexcept {
     }
 
     const auto code = pointers->ExceptionRecord->ExceptionCode;
+    if (capture->exit_requested && code == EXCEPTION_ILLEGAL_INSTRUCTION) {
+        pointers->ContextRecord->Rsp = capture->recovery->host_stack;
+        pointers->ContextRecord->Rip = capture->recovery_address;
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
     const auto kind = windows_fault_kind(code);
     if (kind == GuestFaultKind::unknown) {
         return EXCEPTION_CONTINUE_SEARCH;
@@ -92,6 +101,8 @@ struct ActiveCapture {
     GuestFault* fault{};
     EntryRecoveryState* recovery{};
     GuestAddress recovery_address{};
+    bool exit_requested{};
+    std::uint64_t exit_value{};
 };
 
 std::array<SignalState, 3> signal_states{{
@@ -204,6 +215,15 @@ void guest_signal_handler(int signal_number, siginfo_t* info, void* native_conte
         return;
     }
 
+    if (capture->exit_requested && signal_number == SIGILL) {
+        if (redirect_to_recovery(native_context, capture->recovery->host_stack,
+                                 capture->recovery_address)) {
+            return;
+        }
+        dispatch_previous(signal_number, info, native_context);
+        return;
+    }
+
     const GuestFault fault{
         .kind = fault_kind(signal_number),
         .native_code = signal_number,
@@ -273,6 +293,9 @@ GuestInvocationResult invoke_guest_captured(const EntryTrampoline& trampoline,
     try {
         const auto value = trampoline.invoke(entry, stack_top, arg0, arg1, arg2, &recovery);
         active_capture = previous_capture;
+        if (capture.exit_requested) {
+            return GuestInvocationResult{.value = capture.exit_value, .fault = std::nullopt};
+        }
         if (fault.native_code != 0) {
             return GuestInvocationResult{.value = 0, .fault = fault};
         }
@@ -285,6 +308,24 @@ GuestInvocationResult invoke_guest_captured(const EntryTrampoline& trampoline,
     return GuestInvocationResult{.value = trampoline.invoke(entry, stack_top, arg0, arg1, arg2),
                                  .fault = std::nullopt};
 #endif
+}
+
+[[noreturn]] void terminate_guest_execution(std::uint64_t value) noexcept {
+#if (defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))) || defined(__x86_64__)
+    auto* capture = active_capture;
+    if (capture == nullptr || capture->recovery == nullptr || capture->recovery->host_stack == 0 ||
+        capture->recovery_address == 0) {
+        std::terminate();
+    }
+    capture->exit_value = value;
+    capture->exit_requested = true;
+#if defined(_WIN32) && defined(_MSC_VER)
+    __ud2();
+#else
+    __builtin_trap();
+#endif
+#endif
+    std::terminate();
 }
 
 } // namespace nyxora::runtime
