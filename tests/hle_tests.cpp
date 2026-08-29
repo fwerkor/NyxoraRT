@@ -30,6 +30,7 @@ nyxora::runtime::SymbolKey no_arg_test_key() {
 
 void emit_mov_imm64(std::span<std::byte> output, std::size_t& at, std::byte opcode,
                     std::uint64_t value) {
+    NYXORA_CHECK(at <= output.size() && output.size() - at >= 10);
     output[at++] = std::byte{0x48};
     output[at++] = opcode;
     std::memcpy(output.data() + at, &value, sizeof(value));
@@ -117,7 +118,7 @@ NYXORA_TEST(hle_four_register_bridge_is_guest_callable) {
     NYXORA_CHECK(code->protect(0, page,
                                nyxora::memory::Protection::read |
                                    nyxora::memory::Protection::write));
-    std::array<std::byte, 52> guest_code{};
+    std::array<std::byte, 64> guest_code{};
     guest_code.fill(std::byte{0x90});
     std::size_t at = 0;
     emit_mov_imm64(guest_code, at, std::byte{0xbf}, 1); // rdi
@@ -125,6 +126,7 @@ NYXORA_TEST(hle_four_register_bridge_is_guest_callable) {
     emit_mov_imm64(guest_code, at, std::byte{0xba}, 3); // rdx
     emit_mov_imm64(guest_code, at, std::byte{0xb9}, 4); // rcx
     emit_mov_imm64(guest_code, at, std::byte{0xb8}, binding->address); // rax
+    NYXORA_CHECK(guest_code.size() - at >= 11);
     guest_code[at++] = std::byte{0x48};
     guest_code[at++] = std::byte{0x83};
     guest_code[at++] = std::byte{0xec};
@@ -192,6 +194,7 @@ NYXORA_TEST(libkernel_pthread_create_and_join_work_through_guest_hle_calls) {
                    reinterpret_cast<std::uint64_t>(code->host_pointer())); // rdx = start
     emit_mov_imm64(create_code, create_at, std::byte{0xb9}, argument);      // rcx = arg
     emit_mov_imm64(create_code, create_at, std::byte{0xb8}, create_binding->address);
+    NYXORA_CHECK(create_code.size() - create_at >= 11);
     create_code[create_at++] = std::byte{0x48};
     create_code[create_at++] = std::byte{0x83};
     create_code[create_at++] = std::byte{0xec};
@@ -216,6 +219,7 @@ NYXORA_TEST(libkernel_pthread_create_and_join_work_through_guest_hle_calls) {
     emit_mov_imm64(join_code, join_at, std::byte{0xbe},
                    reinterpret_cast<std::uint64_t>(&child_result));
     emit_mov_imm64(join_code, join_at, std::byte{0xb8}, join_binding->address);
+    NYXORA_CHECK(join_code.size() - join_at >= 11);
     join_code[join_at++] = std::byte{0x48};
     join_code[join_at++] = std::byte{0x83};
     join_code[join_at++] = std::byte{0xec};
