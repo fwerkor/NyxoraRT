@@ -13,13 +13,16 @@
 
 namespace nyxora::runtime {
 
+class KernelServices;
+
 class GuestThreadManager {
 public:
     static constexpr int kPosixEsrch = 3;
     static constexpr int kPosixEinval = 22;
     static constexpr int kPosixEagain = 35;
 
-    explicit GuestThreadManager(const TlsRegistry& tls_registry) : tls_registry_(tls_registry) {}
+    explicit GuestThreadManager(const TlsRegistry& tls_registry, KernelServices* kernel_services = nullptr)
+        : tls_registry_(tls_registry), kernel_services_(kernel_services) {}
     ~GuestThreadManager();
 
     GuestThreadManager(const GuestThreadManager&) = delete;
@@ -36,6 +39,8 @@ public:
     }
     [[nodiscard]] static GuestThreadManager* current() noexcept;
     [[nodiscard]] static GuestAddress current_handle() noexcept;
+    [[nodiscard]] KernelServices* kernel_services() noexcept { return kernel_services_; }
+    [[nodiscard]] const KernelServices* kernel_services() const noexcept { return kernel_services_; }
 
 private:
     friend class ScopedGuestThreadManager;
@@ -48,6 +53,7 @@ private:
     void reap_finished_detached_locked();
 
     const TlsRegistry& tls_registry_;
+    KernelServices* kernel_services_{};
     mutable std::mutex mutex_;
     std::unordered_map<GuestAddress, std::unique_ptr<Record>> threads_;
     bool shutting_down_{};

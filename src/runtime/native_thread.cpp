@@ -1,4 +1,5 @@
 #include "nyxora/runtime/native_thread.hpp"
+#include "nyxora/runtime/tls.hpp"
 
 #include <array>
 #include <cstring>
@@ -16,6 +17,32 @@ void emit_u32(std::vector<std::byte>& code, std::uint32_t value) {
     std::array<std::byte, 4> bytes{};
     std::memcpy(bytes.data(), &value, sizeof(value));
     code.insert(code.end(), bytes.begin(), bytes.end());
+}
+
+
+void emit_save_host_stack_slot(std::vector<std::byte>& code, std::uint32_t teb_offset) {
+    const std::byte load_previous[] = {
+        std::byte{0x65}, std::byte{0x4c}, std::byte{0x8b}, std::byte{0x2c}, std::byte{0x25},
+    }; // mov r13,gs:[disp32]
+    code.insert(code.end(), std::begin(load_previous), std::end(load_previous));
+    emit_u32(code, teb_offset);
+    const std::byte save_previous[] = {
+        std::byte{0x4c}, std::byte{0x89}, std::byte{0xac}, std::byte{0x24},
+        std::byte{0xa0}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
+        std::byte{0x65}, std::byte{0x48}, std::byte{0x89}, std::byte{0x24}, std::byte{0x25},
+    }; // mov [rsp+0xa0],r13; mov gs:[disp32],rsp
+    code.insert(code.end(), std::begin(save_previous), std::end(save_previous));
+    emit_u32(code, teb_offset);
+}
+
+void emit_restore_host_stack_slot(std::vector<std::byte>& code, std::uint32_t teb_offset) {
+    const std::byte load_previous[] = {
+        std::byte{0x4c}, std::byte{0x8b}, std::byte{0xac}, std::byte{0x24},
+        std::byte{0xa0}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
+        std::byte{0x65}, std::byte{0x4c}, std::byte{0x89}, std::byte{0x2c}, std::byte{0x25},
+    }; // mov r13,[rsp+0xa0]; mov gs:[disp32],r13
+    code.insert(code.end(), std::begin(load_previous), std::end(load_previous));
+    emit_u32(code, teb_offset);
 }
 
 void emit_movdqu_rsp(std::vector<std::byte>& code, bool load, unsigned xmm, std::uint32_t offset) {
@@ -37,6 +64,10 @@ std::vector<std::byte> build_entry_trampoline(std::size_t& recovery_offset) {
     recovery_offset = 0;
 #if defined(__x86_64__) || defined(_M_X64)
 #if defined(_WIN32)
+    const auto host_stack_teb_offset = windows_host_stack_teb_offset();
+    if (!host_stack_teb_offset) {
+        return {};
+    }
     const std::byte prefix[] = {
         std::byte{0x4c}, std::byte{0x8b}, std::byte{0x54}, std::byte{0x24}, std::byte{0x28}, // mov r10,[rsp+0x28]
         std::byte{0x48}, std::byte{0x8b}, std::byte{0x44}, std::byte{0x24}, std::byte{0x30}, // mov rax,[rsp+0x30]
@@ -48,13 +79,14 @@ std::vector<std::byte> build_entry_trampoline(std::size_t& recovery_offset) {
         std::byte{0x41}, std::byte{0x55},                                                 // push r13
         std::byte{0x41}, std::byte{0x56},                                                 // push r14
         std::byte{0x41}, std::byte{0x57},                                                 // push r15
-        std::byte{0x48}, std::byte{0x81}, std::byte{0xec}, std::byte{0xa0}, std::byte{0x00},
-        std::byte{0x00}, std::byte{0x00},                                                 // sub rsp,0xa0
+        std::byte{0x48}, std::byte{0x81}, std::byte{0xec}, std::byte{0xb0}, std::byte{0x00},
+        std::byte{0x00}, std::byte{0x00},                                                 // sub rsp,0xb0
     };
     code.insert(code.end(), std::begin(prefix), std::end(prefix));
     for (unsigned xmm = 6; xmm <= 15; ++xmm) {
         emit_movdqu_rsp(code, false, xmm, static_cast<std::uint32_t>((xmm - 6U) * 16U));
     }
+    emit_save_host_stack_slot(code, *host_stack_teb_offset);
     const std::byte save_recovery[] = {
         std::byte{0x48}, std::byte{0x85}, std::byte{0xc0},                               // test rax,rax
         std::byte{0x74}, std::byte{0x03},                                                 // jz +3
@@ -82,12 +114,13 @@ std::vector<std::byte> build_entry_trampoline(std::size_t& recovery_offset) {
     code.insert(code.end(), std::begin(switch_stack), std::end(switch_stack));
 
     const auto append_windows_restore = [&](bool clear_return) {
+        emit_restore_host_stack_slot(code, *host_stack_teb_offset);
         for (unsigned xmm = 6; xmm <= 15; ++xmm) {
             emit_movdqu_rsp(code, true, xmm, static_cast<std::uint32_t>((xmm - 6U) * 16U));
         }
         const std::byte restore[] = {
-            std::byte{0x48}, std::byte{0x81}, std::byte{0xc4}, std::byte{0xa0}, std::byte{0x00},
-            std::byte{0x00}, std::byte{0x00},                                                 // add rsp,0xa0
+            std::byte{0x48}, std::byte{0x81}, std::byte{0xc4}, std::byte{0xb0}, std::byte{0x00},
+            std::byte{0x00}, std::byte{0x00},                                                 // add rsp,0xb0
             std::byte{0x41}, std::byte{0x5f},                                                 // pop r15
             std::byte{0x41}, std::byte{0x5e},                                                 // pop r14
             std::byte{0x41}, std::byte{0x5d},                                                 // pop r13

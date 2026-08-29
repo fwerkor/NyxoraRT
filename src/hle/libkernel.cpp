@@ -1,5 +1,6 @@
 #include "nyxora/hle/libkernel.hpp"
 #include "nyxora/runtime/thread_manager.hpp"
+#include "nyxora/runtime/kernel_services.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -28,6 +29,133 @@ std::uint64_t process_time_counter_frequency() {
 
 std::uint64_t current_cpu() {
     return 0;
+}
+
+
+runtime::KernelServices* kernel_services() {
+    auto* manager = runtime::GuestThreadManager::current();
+    return manager == nullptr ? nullptr : manager->kernel_services();
+}
+
+std::uint64_t signed_result(std::int64_t value) {
+    return static_cast<std::uint64_t>(value);
+}
+
+std::uint64_t kernel_error_result(std::uint32_t value) {
+    return signed_result(static_cast<std::int64_t>(static_cast<std::int32_t>(value)));
+}
+
+std::uint64_t orbis_pthread_result(int result) {
+    if (result == 0) {
+        return 0;
+    }
+    const auto value = 0x80020000U + static_cast<std::uint32_t>(result);
+    return signed_result(static_cast<std::int64_t>(static_cast<std::int32_t>(value)));
+}
+
+std::uint64_t direct_memory_size() {
+    auto* services = kernel_services();
+    return services == nullptr ? 0 : services->direct_memory_size();
+}
+
+std::uint64_t kernel_mprotect(std::uint64_t address, std::uint64_t size,
+                              std::uint64_t protection) {
+    auto* services = kernel_services();
+    if (services == nullptr) {
+        return kernel_error_result(runtime::KernelServices::kErrorEinval);
+    }
+    return signed_result(services->mprotect(static_cast<GuestAddress>(address),
+                                            static_cast<GuestSize>(size),
+                                            static_cast<std::uint32_t>(protection)));
+}
+
+std::uint64_t kernel_open(std::uint64_t path, std::uint64_t flags, std::uint64_t mode) {
+    auto* services = kernel_services();
+    if (services == nullptr) {
+        return kernel_error_result(runtime::KernelServices::kErrorEinval);
+    }
+    return signed_result(services->open_readonly(static_cast<GuestAddress>(path),
+                                                 static_cast<std::uint32_t>(flags),
+                                                 static_cast<std::uint16_t>(mode)));
+}
+
+std::uint64_t kernel_read(std::uint64_t fd, std::uint64_t buffer, std::uint64_t size) {
+    auto* services = kernel_services();
+    if (services == nullptr) {
+        return kernel_error_result(runtime::KernelServices::kErrorEbadf);
+    }
+    return signed_result(services->read(static_cast<int>(static_cast<std::int32_t>(fd)),
+                                        static_cast<GuestAddress>(buffer),
+                                        static_cast<GuestSize>(size)));
+}
+
+std::uint64_t kernel_close(std::uint64_t fd) {
+    auto* services = kernel_services();
+    if (services == nullptr) {
+        return kernel_error_result(runtime::KernelServices::kErrorEbadf);
+    }
+    return signed_result(services->close(static_cast<int>(static_cast<std::int32_t>(fd))));
+}
+
+std::uint64_t posix_mutex_init(std::uint64_t mutex, std::uint64_t attributes) {
+    auto* services = kernel_services();
+    return services == nullptr ? runtime::KernelServices::kPosixEinval
+                               : static_cast<std::uint64_t>(services->mutex_init(
+                                     static_cast<GuestAddress>(mutex),
+                                     static_cast<GuestAddress>(attributes), 0));
+}
+
+std::uint64_t sce_mutex_init(std::uint64_t mutex, std::uint64_t attributes,
+                             std::uint64_t name) {
+    auto* services = kernel_services();
+    const auto result = services == nullptr
+                            ? runtime::KernelServices::kPosixEinval
+                            : services->mutex_init(static_cast<GuestAddress>(mutex),
+                                                   static_cast<GuestAddress>(attributes),
+                                                   static_cast<GuestAddress>(name));
+    return orbis_pthread_result(result);
+}
+
+std::uint64_t posix_mutex_lock(std::uint64_t mutex) {
+    auto* services = kernel_services();
+    return services == nullptr ? runtime::KernelServices::kPosixEinval
+                               : static_cast<std::uint64_t>(
+                                     services->mutex_lock(static_cast<GuestAddress>(mutex)));
+}
+
+std::uint64_t posix_mutex_unlock(std::uint64_t mutex) {
+    auto* services = kernel_services();
+    return services == nullptr ? runtime::KernelServices::kPosixEinval
+                               : static_cast<std::uint64_t>(
+                                     services->mutex_unlock(static_cast<GuestAddress>(mutex)));
+}
+
+std::uint64_t posix_mutex_destroy(std::uint64_t mutex) {
+    auto* services = kernel_services();
+    return services == nullptr ? runtime::KernelServices::kPosixEinval
+                               : static_cast<std::uint64_t>(
+                                     services->mutex_destroy(static_cast<GuestAddress>(mutex)));
+}
+
+std::uint64_t orbis_mutex_lock(std::uint64_t mutex) {
+    auto* services = kernel_services();
+    return orbis_pthread_result(services == nullptr
+                                    ? runtime::KernelServices::kPosixEinval
+                                    : services->mutex_lock(static_cast<GuestAddress>(mutex)));
+}
+
+std::uint64_t orbis_mutex_unlock(std::uint64_t mutex) {
+    auto* services = kernel_services();
+    return orbis_pthread_result(services == nullptr
+                                    ? runtime::KernelServices::kPosixEinval
+                                    : services->mutex_unlock(static_cast<GuestAddress>(mutex)));
+}
+
+std::uint64_t orbis_mutex_destroy(std::uint64_t mutex) {
+    auto* services = kernel_services();
+    return orbis_pthread_result(services == nullptr
+                                    ? runtime::KernelServices::kPosixEinval
+                                    : services->mutex_destroy(static_cast<GuestAddress>(mutex)));
 }
 
 std::uint64_t pthread_create(std::uint64_t thread_out, std::uint64_t attributes,
@@ -86,6 +214,20 @@ void register_core(runtime::HleRegistry& registry) {
                                    "sceKernelGetProcessTimeCounterFrequency");
     (void)registry.register_no_arg(key("g0VTBxfJyu0"), current_cpu,
                                    "sceKernelGetCurrentCpu");
+    (void)registry.register_no_arg(key("pO96TwzOm5E"), direct_memory_size,
+                                   "sceKernelGetDirectMemorySize");
+    (void)registry.register_function(key("vSMAm3cxYTY"),
+                                     reinterpret_cast<GuestAddress>(&kernel_mprotect),
+                                     "sceKernelMprotect");
+    (void)registry.register_function(key("1G3lF1Gg1k8"),
+                                     reinterpret_cast<GuestAddress>(&kernel_open),
+                                     "sceKernelOpen");
+    (void)registry.register_function(key("Cg4srZ6TKbU"),
+                                     reinterpret_cast<GuestAddress>(&kernel_read),
+                                     "sceKernelRead");
+    (void)registry.register_function(key("UK2Tl2DWUns"),
+                                     reinterpret_cast<GuestAddress>(&kernel_close),
+                                     "sceKernelClose");
 
     const auto create_address = reinterpret_cast<GuestAddress>(&pthread_create);
     const auto join_address = reinterpret_cast<GuestAddress>(&pthread_join);
@@ -100,6 +242,35 @@ void register_core(runtime::HleRegistry& registry) {
                                          "pthread_self");
         (void)registry.register_function(key("+U1R4WtXvoc", library), detach_address,
                                          "pthread_detach");
+    }
+
+
+    (void)registry.register_function(key("cmo1RIYva9o"),
+                                     reinterpret_cast<GuestAddress>(&sce_mutex_init),
+                                     "scePthreadMutexInit");
+    (void)registry.register_function(key("9UK1vLZQft4"),
+                                     reinterpret_cast<GuestAddress>(&orbis_mutex_lock),
+                                     "scePthreadMutexLock");
+    (void)registry.register_function(key("tn3VlD0hG60"),
+                                     reinterpret_cast<GuestAddress>(&orbis_mutex_unlock),
+                                     "scePthreadMutexUnlock");
+    (void)registry.register_function(key("2Of0f+3mhhE"),
+                                     reinterpret_cast<GuestAddress>(&orbis_mutex_destroy),
+                                     "scePthreadMutexDestroy");
+
+    const auto mutex_init_address = reinterpret_cast<GuestAddress>(&posix_mutex_init);
+    const auto mutex_lock_address = reinterpret_cast<GuestAddress>(&posix_mutex_lock);
+    const auto mutex_unlock_address = reinterpret_cast<GuestAddress>(&posix_mutex_unlock);
+    const auto mutex_destroy_address = reinterpret_cast<GuestAddress>(&posix_mutex_destroy);
+    for (const char* library : {"libkernel", "libScePosix"}) {
+        (void)registry.register_function(key("ttHNfU+qDBU", library), mutex_init_address,
+                                         "pthread_mutex_init");
+        (void)registry.register_function(key("7H0iTOciTLo", library), mutex_lock_address,
+                                         "pthread_mutex_lock");
+        (void)registry.register_function(key("2Z+PpY6CaJg", library), mutex_unlock_address,
+                                         "pthread_mutex_unlock");
+        (void)registry.register_function(key("ltCfaGr2JGE", library), mutex_destroy_address,
+                                         "pthread_mutex_destroy");
     }
 }
 

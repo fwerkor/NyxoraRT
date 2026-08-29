@@ -1,8 +1,10 @@
 #include "nyxora/runtime/hle_registry.hpp"
+#include "nyxora/runtime/tls.hpp"
 
 #include <array>
 #include <cstring>
 #include <limits>
+#include <span>
 #include <utility>
 
 namespace nyxora::runtime {
@@ -61,7 +63,7 @@ public:
     }
 
 private:
-    static constexpr std::size_t kThunkSize = 48;
+    static constexpr std::size_t kThunkSize = 64;
 
 #if defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
     BridgeTable(memory::NativeArena arena, std::size_t capacity, GuestSize data_offset)
@@ -70,39 +72,73 @@ private:
 
     bool emit_all() {
 #if defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
+        const auto host_stack_teb_offset = windows_host_stack_teb_offset();
+        if (!host_stack_teb_offset) {
+            return false;
+        }
         for (std::size_t index = 0; index < capacity_; ++index) {
             const auto code_address = arena_.base() + index * kThunkSize;
             const auto slot_address = arena_.base() + data_offset_ + index * sizeof(std::uint64_t);
-            // The RIP-relative load begins at byte 22 and ends at byte 29.
-            const auto displacement = static_cast<std::int64_t>(slot_address) -
-                                      static_cast<std::int64_t>(code_address + 29U);
-            if (displacement < std::numeric_limits<std::int32_t>::min() ||
-                displacement > std::numeric_limits<std::int32_t>::max()) {
-                return false;
-            }
-            const auto rel = static_cast<std::int32_t>(displacement);
             std::array<std::byte, kThunkSize> code{};
             code.fill(std::byte{0x90});
-            const std::byte prefix[] = {
+            std::size_t offset = 0;
+            auto append = [&](std::span<const std::byte> bytes) {
+                if (bytes.size() > code.size() - offset) {
+                    return false;
+                }
+                std::memcpy(code.data() + offset, bytes.data(), bytes.size());
+                offset += bytes.size();
+                return true;
+            };
+            auto append_u32 = [&](std::uint32_t value) {
+                const auto bytes = std::span<const std::byte>(
+                    reinterpret_cast<const std::byte*>(&value), sizeof(value));
+                return append(bytes);
+            };
+
+            const std::byte save_guest_stack[] = {
+                std::byte{0x41}, std::byte{0x54},                                           // push r12
+                std::byte{0x4c}, std::byte{0x8d}, std::byte{0x64}, std::byte{0x24},
+                std::byte{0x08},                                                           // lea r12,[rsp+8]
                 std::byte{0x49}, std::byte{0x89}, std::byte{0xd2},                         // mov r10,rdx
                 std::byte{0x49}, std::byte{0x89}, std::byte{0xcb},                         // mov r11,rcx
                 std::byte{0x48}, std::byte{0x89}, std::byte{0xf9},                         // mov rcx,rdi
                 std::byte{0x48}, std::byte{0x89}, std::byte{0xf2},                         // mov rdx,rsi
                 std::byte{0x4d}, std::byte{0x89}, std::byte{0xd0},                         // mov r8,r10
                 std::byte{0x4d}, std::byte{0x89}, std::byte{0xd9},                         // mov r9,r11
+                std::byte{0x65}, std::byte{0x4c}, std::byte{0x8b}, std::byte{0x1c},
+                std::byte{0x25},                                                           // mov r11,gs:[disp32]
+            };
+            if (!append(save_guest_stack) || !append_u32(*host_stack_teb_offset)) {
+                return false;
+            }
+            const std::byte switch_host_stack[] = {
+                std::byte{0x4c}, std::byte{0x89}, std::byte{0xdc},                         // mov rsp,r11
                 std::byte{0x48}, std::byte{0x83}, std::byte{0xec}, std::byte{0x28},       // sub rsp,0x28
                 std::byte{0x48}, std::byte{0x8b}, std::byte{0x05},                         // mov rax,[rip+rel32]
             };
-            static_assert(sizeof(prefix) == 25);
-            std::memcpy(code.data(), prefix, sizeof(prefix));
-            std::memcpy(code.data() + 25, &rel, sizeof(rel));
-            const std::byte suffix[] = {
+            if (!append(switch_host_stack)) {
+                return false;
+            }
+            const auto rip_after_target_load = code_address + offset + sizeof(std::int32_t);
+            const auto displacement = static_cast<std::int64_t>(slot_address) -
+                                      static_cast<std::int64_t>(rip_after_target_load);
+            if (displacement < std::numeric_limits<std::int32_t>::min() ||
+                displacement > std::numeric_limits<std::int32_t>::max()) {
+                return false;
+            }
+            const auto rel = static_cast<std::uint32_t>(static_cast<std::int32_t>(displacement));
+            if (!append_u32(rel)) {
+                return false;
+            }
+            const std::byte finish[] = {
                 std::byte{0xff}, std::byte{0xd0},                                           // call rax
-                std::byte{0x48}, std::byte{0x83}, std::byte{0xc4}, std::byte{0x28},         // add rsp,0x28
+                std::byte{0x4c}, std::byte{0x89}, std::byte{0xe4},                         // mov rsp,r12
+                std::byte{0x48}, std::byte{0x83}, std::byte{0xec}, std::byte{0x08},       // sub rsp,8
+                std::byte{0x41}, std::byte{0x5c},                                           // pop r12
                 std::byte{0xc3},                                                             // ret
             };
-            std::memcpy(code.data() + 29, suffix, sizeof(suffix));
-            if (!arena_.copy(index * kThunkSize, code)) {
+            if (!append(finish) || !arena_.copy(index * kThunkSize, code)) {
                 return false;
             }
         }

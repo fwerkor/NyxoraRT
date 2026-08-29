@@ -97,6 +97,62 @@ bool GuestAddressSpace::protect(GuestAddress base, GuestSize size, Protection pr
     return true;
 }
 
+
+bool GuestAddressSpace::protect_range(GuestAddress base, GuestSize size, Protection protection) {
+    GuestAddress end{};
+    if (!end_address(base, size, end)) {
+        return false;
+    }
+    auto it = find_region(base);
+    if (it == regions_.end()) {
+        return false;
+    }
+    const auto original_base = it->second.info.base;
+    const auto original_size = it->second.info.size;
+    if (original_base > std::numeric_limits<GuestAddress>::max() - original_size ||
+        end > original_base + original_size) {
+        return false;
+    }
+    if (base == original_base && size == original_size) {
+        return protect(base, size, protection);
+    }
+
+    const auto before_size = base - original_base;
+    const auto after_size = original_base + original_size - end;
+    std::map<GuestAddress, Region> replacements;
+    const auto make_region = [&](GuestAddress piece_base, GuestSize piece_size,
+                                 Protection piece_protection, GuestSize storage_offset) {
+        Region piece;
+        piece.info = RegionInfo{piece_base, piece_size, piece_protection, it->second.info.name};
+        if (!native_) {
+            const auto begin =
+                it->second.storage.begin() + static_cast<std::ptrdiff_t>(storage_offset);
+            piece.storage.assign(begin, begin + static_cast<std::ptrdiff_t>(piece_size));
+        }
+        replacements.emplace(piece_base, std::move(piece));
+    };
+
+    if (before_size != 0) {
+        make_region(original_base, before_size, it->second.info.protection, 0);
+    }
+    make_region(base, size, protection, before_size);
+    if (after_size != 0) {
+        make_region(end, after_size, it->second.info.protection, before_size + size);
+    }
+
+    if (native_) {
+        const auto offset = native_offset(base);
+        const auto page = static_cast<GuestSize>(NativeArena::page_size());
+        if (!offset || size % page != 0 || !native_->protect(*offset, size, protection)) {
+            return false;
+        }
+    }
+
+    regions_.erase(it);
+    regions_.merge(replacements);
+    return true;
+}
+
 std::map<GuestAddress, GuestAddressSpace::Region>::iterator
 GuestAddressSpace::find_region(GuestAddress address) {
     auto it = regions_.upper_bound(address);

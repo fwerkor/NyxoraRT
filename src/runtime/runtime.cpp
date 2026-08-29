@@ -161,8 +161,9 @@ Runtime::Runtime(std::unique_ptr<gpu::Backend> gpu_backend)
     : Runtime(std::move(gpu_backend), memory::GuestAddressSpace{}) {}
 
 Runtime::Runtime(std::unique_ptr<gpu::Backend> gpu_backend, memory::GuestAddressSpace memory)
-    : memory_(std::move(memory)), thread_manager_(tls_registry_),
-      late_imports_(LateImportTable::create()), gpu_(std::move(gpu_backend)) {
+    : memory_(std::move(memory)), kernel_services_(memory_),
+      thread_manager_(tls_registry_, &kernel_services_), late_imports_(LateImportTable::create()),
+      gpu_(std::move(gpu_backend)) {
     if (!gpu_) {
         throw std::invalid_argument("Runtime requires a GPU backend");
     }
@@ -172,6 +173,13 @@ Runtime::Runtime(std::unique_ptr<gpu::Backend> gpu_backend, memory::GuestAddress
 
 LoadedModule Runtime::load_elf(const std::filesystem::path& path, GuestAddress base) {
     const auto image = loader::Elf64Image::from_file(path);
+    if (!kernel_services_.guest_root_configured()) {
+        std::error_code error;
+        const auto absolute = std::filesystem::absolute(path, error);
+        if (error || !kernel_services_.set_guest_root(absolute.parent_path())) {
+            throw std::runtime_error("unable to configure guest /app0 root");
+        }
+    }
     return load_image(image, path, base);
 }
 

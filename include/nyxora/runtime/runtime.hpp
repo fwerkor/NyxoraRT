@@ -16,6 +16,7 @@
 #include "nyxora/runtime/fault.hpp"
 #include "nyxora/runtime/guest_thread.hpp"
 #include "nyxora/runtime/late_imports.hpp"
+#include "nyxora/runtime/kernel_services.hpp"
 #include "nyxora/runtime/native_thread.hpp"
 #include "nyxora/runtime/hle_registry.hpp"
 #include "nyxora/runtime/symbol_registry.hpp"
@@ -73,11 +74,15 @@ public:
         return GuestThreadContext::create(tls_registry_);
     }
     [[nodiscard]] gpu::Backend& gpu() noexcept { return *gpu_; }
+    [[nodiscard]] bool set_guest_root(const std::filesystem::path& root) {
+        return kernel_services_.set_guest_root(root);
+    }
 
 private:
     memory::GuestAddressSpace memory_;
     SymbolRegistry symbols_;
     TlsRegistry tls_registry_;
+    KernelServices kernel_services_;
     GuestThreadManager thread_manager_;
     std::optional<LateImportTable> late_imports_;
     std::unique_ptr<HleRegistry> hle_;

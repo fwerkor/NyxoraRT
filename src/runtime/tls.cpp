@@ -45,10 +45,24 @@ constexpr std::uint32_t kTebTlsSlotsOffset = 0x1480;
 static_assert(sizeof(void*) == 8);
 std::once_flag windows_tcb_slot_once;
 DWORD windows_tcb_slot = TLS_OUT_OF_INDEXES;
+std::once_flag windows_host_stack_slot_once;
+DWORD windows_host_stack_slot = TLS_OUT_OF_INDEXES;
 
 DWORD get_windows_tcb_slot() noexcept {
     std::call_once(windows_tcb_slot_once, [] { windows_tcb_slot = ::TlsAlloc(); });
     return windows_tcb_slot;
+}
+
+DWORD get_windows_host_stack_slot() noexcept {
+    std::call_once(windows_host_stack_slot_once, [] { windows_host_stack_slot = ::TlsAlloc(); });
+    return windows_host_stack_slot;
+}
+
+std::optional<std::uint32_t> direct_teb_slot_offset(DWORD slot) noexcept {
+    if (slot == TLS_OUT_OF_INDEXES || slot >= kDirectTebTlsSlotCount) {
+        return std::nullopt;
+    }
+    return kTebTlsSlotsOffset + slot * static_cast<std::uint32_t>(sizeof(void*));
 }
 #endif
 
@@ -220,11 +234,15 @@ GuestThreadContext* ScopedGuestThreadContext::current() noexcept {
 
 std::optional<std::uint32_t> windows_guest_tcb_teb_offset() noexcept {
 #if defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
-    const auto slot = get_windows_tcb_slot();
-    if (slot == TLS_OUT_OF_INDEXES || slot >= kDirectTebTlsSlotCount) {
-        return std::nullopt;
-    }
-    return kTebTlsSlotsOffset + slot * static_cast<std::uint32_t>(sizeof(void*));
+    return direct_teb_slot_offset(get_windows_tcb_slot());
+#else
+    return std::nullopt;
+#endif
+}
+
+std::optional<std::uint32_t> windows_host_stack_teb_offset() noexcept {
+#if defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
+    return direct_teb_slot_offset(get_windows_host_stack_slot());
 #else
     return std::nullopt;
 #endif

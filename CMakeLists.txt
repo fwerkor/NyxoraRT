@@ -29,6 +29,7 @@ add_library(nyxora_core
     src/runtime/linker.cpp
     src/runtime/late_imports.cpp
     src/runtime/hle_registry.cpp
+    src/runtime/kernel_services.cpp
     src/runtime/fault.cpp
     src/runtime/cpu_patches.cpp
     src/runtime/guest_thread.cpp

@@ -44,6 +44,7 @@ public:
     bool map(GuestAddress base, GuestSize size, Protection protection, std::string name);
     bool unmap(GuestAddress base, GuestSize size);
     bool protect(GuestAddress base, GuestSize size, Protection protection);
+    bool protect_range(GuestAddress base, GuestSize size, Protection protection);
     bool write(GuestAddress address, std::span<const std::byte> bytes);
     bool patch(GuestAddress address, std::span<const std::byte> bytes);
     bool flush_instruction_cache(GuestAddress address, GuestSize size) noexcept;

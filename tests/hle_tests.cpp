@@ -1,6 +1,7 @@
 #include "test.hpp"
 #include "nyxora/hle/libkernel.hpp"
 #include "nyxora/runtime/hle_registry.hpp"
+#include "nyxora/runtime/kernel_services.hpp"
 #include "nyxora/runtime/native_thread.hpp"
 #include "nyxora/runtime/symbol_registry.hpp"
 #include "nyxora/runtime/thread_manager.hpp"
@@ -10,6 +11,9 @@
 #include <cstdint>
 #include <span>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <string>
 
 namespace {
 std::uint64_t returns_123() {
@@ -48,6 +52,14 @@ nyxora::runtime::SymbolKey libkernel_key(const char* nid) {
         .kind = nyxora::runtime::SymbolKind::function,
     };
 }
+
+
+#if defined(_WIN32) && defined(_M_X64)
+std::uint64_t host_stack_local_address() {
+    volatile std::uint64_t marker = 0;
+    return reinterpret_cast<std::uint64_t>(&marker);
+}
+#endif
 }
 
 NYXORA_TEST(hle_no_arg_bridge_is_guest_callable) {
@@ -72,7 +84,7 @@ NYXORA_TEST(libkernel_core_registers_process_time_and_cpu_hle) {
     nyxora::runtime::SymbolRegistry symbols;
     nyxora::runtime::HleRegistry hle(symbols);
     nyxora::hle::libkernel::register_core(hle);
-    NYXORA_CHECK(hle.size() == 12);
+    NYXORA_CHECK(hle.size() == 29);
 
     const auto frequency = symbols.resolve(libkernel_key("BNowx2l588E"));
     const auto cpu = symbols.resolve(libkernel_key("g0VTBxfJyu0"));
@@ -327,5 +339,248 @@ NYXORA_TEST(libkernel_pthread_self_and_detach_use_runtime_thread_identity) {
                      64 * 1024) == 0);
     NYXORA_CHECK(trampoline->invoke(detach_binding->address, stack->top(), handle) == 0);
     NYXORA_CHECK(manager.join(handle, nullptr) == nyxora::runtime::GuestThreadManager::kPosixEinval);
+#endif
+}
+
+
+NYXORA_TEST(libkernel_memory_hle_uses_runtime_guest_address_space) {
+#if defined(__x86_64__) || defined(_M_X64)
+    constexpr nyxora::GuestSize guest_page = 0x4000;
+    const auto host_page = static_cast<nyxora::GuestSize>(nyxora::memory::NativeArena::page_size());
+    auto memory = nyxora::memory::GuestAddressSpace::reserve_native(guest_page * 5 + host_page);
+    NYXORA_CHECK(memory.has_value());
+    const auto arena_base = memory->native_base();
+    const auto data_base = (arena_base + guest_page - 1) / guest_page * guest_page;
+    NYXORA_CHECK(memory->map(data_base, guest_page * 2,
+                             nyxora::memory::Protection::read |
+                                 nyxora::memory::Protection::write,
+                             "hle-data"));
+
+    nyxora::runtime::KernelServices services(*memory);
+    nyxora::runtime::TlsRegistry tls;
+    nyxora::runtime::GuestThreadManager manager(tls, &services);
+    nyxora::runtime::SymbolRegistry symbols;
+    nyxora::runtime::HleRegistry hle(symbols);
+    nyxora::hle::libkernel::register_core(hle);
+    const auto direct_size = symbols.resolve(libkernel_key("pO96TwzOm5E"));
+    const auto mprotect = symbols.resolve(libkernel_key("vSMAm3cxYTY"));
+    NYXORA_CHECK(direct_size.has_value());
+    NYXORA_CHECK(mprotect.has_value());
+
+    auto stack = nyxora::runtime::GuestStack::create(64 * 1024);
+    auto trampoline = nyxora::runtime::EntryTrampoline::create();
+    NYXORA_CHECK(stack.has_value());
+    NYXORA_CHECK(trampoline.has_value());
+    nyxora::runtime::ScopedGuestThreadManager manager_scope(manager);
+    NYXORA_CHECK(trampoline->invoke(direct_size->address, stack->top()) == memory->native_size());
+    NYXORA_CHECK(trampoline->invoke(mprotect->address, stack->top(), data_base, guest_page, 1) == 0);
+
+    const auto* first = memory->find(data_base);
+    const auto* second = memory->find(data_base + guest_page);
+    NYXORA_CHECK(first != nullptr);
+    NYXORA_CHECK(second != nullptr);
+    NYXORA_CHECK(first->protection == nyxora::memory::Protection::read);
+    NYXORA_CHECK(second->protection ==
+                 (nyxora::memory::Protection::read | nyxora::memory::Protection::write));
+    const std::array<std::byte, 1> value{std::byte{0x55}};
+    NYXORA_CHECK(!memory->write(data_base, value));
+    NYXORA_CHECK(memory->write(data_base + guest_page, value));
+
+    NYXORA_CHECK(trampoline->invoke(mprotect->address, stack->top(), data_base, guest_page, 2) == 0);
+    const auto* read_write = memory->find(data_base);
+    NYXORA_CHECK(read_write != nullptr);
+    NYXORA_CHECK(read_write->protection ==
+                 (nyxora::memory::Protection::read | nyxora::memory::Protection::write));
+    NYXORA_CHECK(memory->write(data_base, value));
+#endif
+}
+
+NYXORA_TEST(libkernel_file_hle_reads_only_inside_guest_root) {
+#if defined(__x86_64__) || defined(_M_X64)
+    const auto unique = std::to_string(reinterpret_cast<std::uintptr_t>(&libkernel_file_hle_reads_only_inside_guest_root));
+    const auto temp = std::filesystem::temp_directory_path();
+    const auto root = temp / ("nyxora-hle-" + unique);
+    const auto outside = temp / ("nyxora-hle-outside-" + unique + ".bin");
+    std::filesystem::create_directories(root);
+    struct Cleanup {
+        std::filesystem::path root;
+        std::filesystem::path outside;
+        ~Cleanup() {
+            std::error_code error;
+            std::filesystem::remove_all(root, error);
+            error.clear();
+            std::filesystem::remove(outside, error);
+        }
+    } cleanup{root, outside};
+    {
+        std::ofstream output(root / "data.bin", std::ios::binary);
+        output << "nyxora-file";
+    }
+    {
+        std::ofstream output(outside, std::ios::binary);
+        output << "outside";
+    }
+
+    nyxora::memory::GuestAddressSpace memory;
+    constexpr nyxora::GuestAddress data_base = 0x20000;
+    NYXORA_CHECK(memory.map(data_base, 0x4000,
+                            nyxora::memory::Protection::read |
+                                nyxora::memory::Protection::write,
+                            "guest-io"));
+    constexpr char guest_path[] = "/app0/data.bin";
+    NYXORA_CHECK(memory.write(
+        data_base,
+        std::span<const std::byte>(reinterpret_cast<const std::byte*>(guest_path), sizeof(guest_path))));
+
+    nyxora::runtime::KernelServices services(memory);
+    nyxora::runtime::TlsRegistry denied_tls;
+    nyxora::runtime::GuestThreadManager denied_manager(denied_tls, &services);
+    nyxora::runtime::SymbolRegistry denied_symbols;
+    nyxora::runtime::HleRegistry denied_hle(denied_symbols);
+    nyxora::hle::libkernel::register_core(denied_hle);
+    const auto denied_open = denied_symbols.resolve(libkernel_key("1G3lF1Gg1k8"));
+    NYXORA_CHECK(denied_open.has_value());
+    {
+        auto denied_stack = nyxora::runtime::GuestStack::create(64 * 1024);
+        auto denied_trampoline = nyxora::runtime::EntryTrampoline::create();
+        NYXORA_CHECK(denied_stack.has_value());
+        NYXORA_CHECK(denied_trampoline.has_value());
+        nyxora::runtime::ScopedGuestThreadManager denied_scope(denied_manager);
+        const auto result = denied_trampoline->invoke(denied_open->address, denied_stack->top(),
+                                                       data_base, 0, 0);
+        NYXORA_CHECK(static_cast<std::uint32_t>(result) ==
+                     nyxora::runtime::KernelServices::kErrorEacces);
+    }
+
+    NYXORA_CHECK(services.set_guest_root(root));
+    nyxora::runtime::TlsRegistry tls;
+    nyxora::runtime::GuestThreadManager manager(tls, &services);
+    nyxora::runtime::SymbolRegistry symbols;
+    nyxora::runtime::HleRegistry hle(symbols);
+    nyxora::hle::libkernel::register_core(hle);
+    const auto open = symbols.resolve(libkernel_key("1G3lF1Gg1k8"));
+    const auto read = symbols.resolve(libkernel_key("Cg4srZ6TKbU"));
+    const auto close = symbols.resolve(libkernel_key("UK2Tl2DWUns"));
+    NYXORA_CHECK(open.has_value());
+    NYXORA_CHECK(read.has_value());
+    NYXORA_CHECK(close.has_value());
+
+    auto stack = nyxora::runtime::GuestStack::create(64 * 1024);
+    auto trampoline = nyxora::runtime::EntryTrampoline::create();
+    NYXORA_CHECK(stack.has_value());
+    NYXORA_CHECK(trampoline.has_value());
+    nyxora::runtime::ScopedGuestThreadManager manager_scope(manager);
+
+    const auto fd = trampoline->invoke(open->address, stack->top(), data_base, 0, 0);
+    NYXORA_CHECK(fd >= 3 && fd < 1024);
+    constexpr nyxora::GuestAddress buffer = data_base + 0x100;
+    const auto count = trampoline->invoke(read->address, stack->top(), fd, buffer, 11);
+    NYXORA_CHECK(count == 11);
+    const auto bytes = memory.view(buffer, 11);
+    const std::string text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    NYXORA_CHECK(text == "nyxora-file");
+    NYXORA_CHECK(trampoline->invoke(close->address, stack->top(), fd) == 0);
+
+    const auto denied = trampoline->invoke(open->address, stack->top(), data_base, 0x0200, 0);
+    NYXORA_CHECK(static_cast<std::uint32_t>(denied) == nyxora::runtime::KernelServices::kErrorEacces);
+
+    const auto traversal = std::string("/app0/../") + outside.filename().string();
+    NYXORA_CHECK(memory.write(
+        data_base,
+        std::span<const std::byte>(reinterpret_cast<const std::byte*>(traversal.c_str()),
+                                  traversal.size() + 1)));
+    const auto escaped = trampoline->invoke(open->address, stack->top(), data_base, 0, 0);
+    NYXORA_CHECK(static_cast<std::uint32_t>(escaped) ==
+                 nyxora::runtime::KernelServices::kErrorEnoent);
+#endif
+}
+
+NYXORA_TEST(libkernel_mutex_hle_preserves_posix_and_orbis_error_conventions) {
+#if defined(__x86_64__) || defined(_M_X64)
+    nyxora::memory::GuestAddressSpace memory;
+    constexpr nyxora::GuestAddress slot = 0x30000;
+    NYXORA_CHECK(memory.map(slot, 0x1000,
+                            nyxora::memory::Protection::read |
+                                nyxora::memory::Protection::write,
+                            "mutex"));
+    NYXORA_CHECK(memory.zero(slot, 8));
+    nyxora::runtime::KernelServices services(memory);
+    nyxora::runtime::TlsRegistry tls;
+    nyxora::runtime::GuestThreadManager manager(tls, &services);
+    nyxora::runtime::SymbolRegistry symbols;
+    nyxora::runtime::HleRegistry hle(symbols);
+    nyxora::hle::libkernel::register_core(hle);
+
+    const auto sce_init = symbols.resolve(libkernel_key("cmo1RIYva9o"));
+    const auto posix_lock = symbols.resolve(libkernel_key("7H0iTOciTLo"));
+    const auto posix_unlock = symbols.resolve(libkernel_key("2Z+PpY6CaJg"));
+    const auto orbis_destroy = symbols.resolve(libkernel_key("2Of0f+3mhhE"));
+    NYXORA_CHECK(sce_init.has_value());
+    NYXORA_CHECK(posix_lock.has_value());
+    NYXORA_CHECK(posix_unlock.has_value());
+    NYXORA_CHECK(orbis_destroy.has_value());
+
+    auto stack = nyxora::runtime::GuestStack::create(64 * 1024);
+    auto trampoline = nyxora::runtime::EntryTrampoline::create();
+    NYXORA_CHECK(stack.has_value());
+    NYXORA_CHECK(trampoline.has_value());
+    nyxora::runtime::ScopedGuestThreadManager manager_scope(manager);
+
+    NYXORA_CHECK(trampoline->invoke(sce_init->address, stack->top(), slot, 0, 0) == 0);
+    NYXORA_CHECK(trampoline->invoke(posix_lock->address, stack->top(), slot) == 0);
+    NYXORA_CHECK(trampoline->invoke(posix_lock->address, stack->top(), slot) ==
+                 nyxora::runtime::KernelServices::kPosixEdeadlk);
+    NYXORA_CHECK(trampoline->invoke(posix_unlock->address, stack->top(), slot) == 0);
+    NYXORA_CHECK(trampoline->invoke(orbis_destroy->address, stack->top(), slot) == 0);
+    const auto destroyed_again = trampoline->invoke(orbis_destroy->address, stack->top(), slot);
+    NYXORA_CHECK(static_cast<std::uint32_t>(destroyed_again) ==
+                 nyxora::runtime::KernelServices::kErrorEinval);
+
+    NYXORA_CHECK(memory.zero(slot, 8));
+    NYXORA_CHECK(trampoline->invoke(posix_lock->address, stack->top(), slot) == 0);
+    NYXORA_CHECK(trampoline->invoke(posix_unlock->address, stack->top(), slot) == 0);
+    NYXORA_CHECK(trampoline->invoke(orbis_destroy->address, stack->top(), slot) == 0);
+#endif
+}
+
+
+NYXORA_TEST(libkernel_services_propagate_into_pthread_guest_workers) {
+#if defined(__x86_64__) || defined(_M_X64)
+    const auto page = nyxora::memory::NativeArena::page_size();
+    auto memory = nyxora::memory::GuestAddressSpace::reserve_native(page * 4U);
+    NYXORA_CHECK(memory.has_value());
+    nyxora::runtime::KernelServices services(*memory);
+    nyxora::runtime::TlsRegistry tls;
+    nyxora::runtime::GuestThreadManager manager(tls, &services);
+    nyxora::runtime::SymbolRegistry symbols;
+    nyxora::runtime::HleRegistry hle(symbols);
+    nyxora::hle::libkernel::register_core(hle);
+    const auto direct_size = symbols.resolve(libkernel_key("pO96TwzOm5E"));
+    NYXORA_CHECK(direct_size.has_value());
+
+    nyxora::GuestAddress handle = 0;
+    NYXORA_CHECK(manager.create(&handle, 0, direct_size->address, 0, 64 * 1024) == 0);
+    nyxora::GuestAddress result = 0;
+    NYXORA_CHECK(manager.join(handle, &result) == 0);
+    NYXORA_CHECK(result == memory->native_size());
+#endif
+}
+
+
+NYXORA_TEST(windows_hle_bridge_calls_host_cpp_on_the_os_stack) {
+#if defined(_WIN32) && defined(_M_X64)
+    nyxora::runtime::SymbolRegistry symbols;
+    nyxora::runtime::HleRegistry hle(symbols);
+    const auto custom_key = libkernel_key("host-stack-test");
+    NYXORA_CHECK(hle.register_no_arg(custom_key, host_stack_local_address, "host stack test"));
+    const auto binding = symbols.resolve(custom_key);
+    NYXORA_CHECK(binding.has_value());
+    auto stack = nyxora::runtime::GuestStack::create(64 * 1024);
+    auto trampoline = nyxora::runtime::EntryTrampoline::create();
+    NYXORA_CHECK(stack.has_value());
+    NYXORA_CHECK(trampoline.has_value());
+    const auto local_address = trampoline->invoke(binding->address, stack->top());
+    NYXORA_CHECK(local_address != 0);
+    NYXORA_CHECK(!stack->contains(local_address));
 #endif
 }

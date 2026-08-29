@@ -101,6 +101,7 @@ private:
 };
 
 [[nodiscard]] std::optional<std::uint32_t> windows_guest_tcb_teb_offset() noexcept;
+[[nodiscard]] std::optional<std::uint32_t> windows_host_stack_teb_offset() noexcept;
 
 class ScopedGuestSegment {
 public:
