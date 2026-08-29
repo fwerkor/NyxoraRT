@@ -13,6 +13,9 @@
 #include <unistd.h>
 #elif defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
 #define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #endif
 
