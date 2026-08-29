@@ -29,7 +29,7 @@ The initial framework already provides:
 - a first `libkernel` HLE slice for process-time counters/frequency and current-CPU queries, registered through the same version-aware symbol path as guest exports;
 - `Runtime::invoke_entry()` as a synchronous end-to-end path from a native-backed loaded module through guest stack/thread context to native entry execution;
 - POSIX guest fault capture for SIGSEGV/SIGBUS/SIGILL and Windows x64 vectored-exception recovery, both returning through the native entry recovery epilogue;
-- `GuestThread`/`Runtime::start_thread()` plus a runtime-owned thread manager, with initial `pthread_create`/`pthread_join` HLE for `libkernel` and `libScePosix`;
+- `GuestThread`/`Runtime::start_thread()` plus a runtime-owned thread manager, with `pthread_create`, `pthread_join`, `pthread_self`, and guest-semantic `pthread_detach` HLE for `libkernel` and `libScePosix`; detached guest threads remain host-owned until completion/shutdown rather than escaping the runtime;
 - a bounds-checked PM4 packet frontend, GPU submission/timeline interface, and deterministic null backend;
 - unit tests and CI-ready CMake/CTest targets.
 
@@ -47,7 +47,7 @@ To inspect a legal, unencrypted x86-64 ELF test image:
 
 ## Near-term roadmap
 
-1. Extend Windows TCB rewriting beyond `FS:[0]` with explicit trampolines, and add remaining pthread basics such as attributes, detach, self, and exit.
+1. Extend Windows TCB rewriting beyond `FS:[0]` with explicit trampolines; add pthread attributes and a dedicated safe guest-thread termination primitive before exposing `pthread_exit`.
 2. Expand `libkernel` HLE into memory, files, synchronization, and sleep/time.
 3. Module lifecycle: dependency loading, init/fini arrays, process parameters, and richer runtime-owned thread tracking.
 4. PM4 command processor with deterministic tracing and state tracking.

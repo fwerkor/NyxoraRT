@@ -52,12 +52,12 @@ On Linux x86-64, supported guest FS accesses are rewritten to GS and a scoped se
 
 POSIX x86-64 native execution installs process-level SIGSEGV/SIGBUS/SIGILL handlers once, while Windows x64 installs a vectored exception handler. Capture state is thread-local and only active around native guest invocation. Both paths record the fault address and instruction pointer, rewrite the native exception context to the entry trampoline's saved host stack/recovery epilogue, and return through normal register restoration. POSIX faults outside an active guest invocation are chained to the previous handler; Windows returns `EXCEPTION_CONTINUE_SEARCH`.
 
-`GuestThread` composes an independent guest stack, TLS/TCB context, segment scope, entry trampoline, and captured result on a real host thread. `GuestThreadManager` owns opaque guest thread handles per runtime and is propagated through a thread-local scope so a child guest thread can create another thread without a process-global runtime singleton. Initial `pthread_create` and `pthread_join` HLE bindings are registered for both `libkernel` and `libScePosix`; attributes are deliberately limited to the null/default case for now. Windows HLE calls use one generated SysV-to-MS-x64 bridge that remaps the first four integer/pointer arguments, rather than per-function bridge implementations.
+`GuestThread` composes an independent guest stack, TLS/TCB context, segment scope, entry trampoline, and captured result on a real host thread. `GuestThreadManager` owns opaque guest thread handles per runtime and propagates both the manager and current handle through a thread-local scope, so `pthread_self` is stable from the first guest instruction and a child can create another thread without a process-global runtime singleton. `pthread_create`, `pthread_join`, `pthread_self`, and `pthread_detach` are registered for both `libkernel` and `libScePosix`; attributes remain limited to the null/default case. Guest detach marks the handle non-joinable but intentionally keeps the host `std::thread` runtime-owned. Finished detached records are reaped lazily, and manager shutdown prevents new creates before joining any remaining workers outside the manager lock. Windows HLE calls use one generated SysV-to-MS-x64 bridge that remaps the first four integer/pointer arguments rather than per-function bridge implementations.
 
 The next native-execution work is:
 
 - trampoline-based Windows rewrites for nonzero TCB offsets;
-- pthread attributes, detach, self, exit, cancellation basics, and stronger thread-state diagnostics;
+- pthread attributes, cancellation basics, and stronger thread-state diagnostics; add `pthread_exit` only after an explicit guest-termination recovery path can return through the native trampoline without C++ unwinding across raw guest/generated frames;
 - Windows host-call stack switching for HLE functions that may probe or consume substantial stack;
 - a narrow fallback mechanism for instructions or behaviors that cannot execute directly.
 
@@ -65,7 +65,7 @@ The CPU layer must not become a general DBT unless evidence shows it is necessar
 
 ### Initial libkernel HLE
 
-The HLE registry shares the same `SymbolKey` space as guest exports. The first registered `libkernel` functions cover process time, process-time counter/frequency, and current-CPU queries. On SysV x86-64 hosts these bindings can point directly at host implementations. Windows uses a generated guest-SysV-to-host-MS-x64 no-argument bridge with shadow-space handling; wider signatures will use explicit ABI bridge families rather than unsafe function-pointer casts.
+The HLE registry shares the same `SymbolKey` space as guest exports. The first registered `libkernel` functions cover process time, process-time counter/frequency, current-CPU queries, and the initial pthread lifecycle. On SysV x86-64 hosts these bindings can point directly at host implementations. Windows uses a generated guest-SysV-to-host-MS-x64 bridge with shadow-space handling and remaps the first four integer/pointer argument registers; signatures wider than that still need an explicit bridge extension rather than unsafe function-pointer casts.
 
 ### GPU
 
