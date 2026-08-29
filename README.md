@@ -26,10 +26,10 @@ The initial framework already provides:
 - per-thread PT_TLS images with original alignment, initialized bytes, zeroed TLS BSS, a 0x40-byte guest TCB/DTV model, and scoped runtime thread context;
 - decoded x86-64 TCB patching using pinned Zydis 4.1.1: Linux rewrites supported `FS:[TCB]` accesses to GS; Windows keeps `FS:[0]` as an in-place TEB-slot rewrite and sends supported nonzero `MOV`/`CMP`/`XOR` reads through near side thunks that reload the real TCB pointer; unsupported forms fail loading instead of running with incorrect host TLS semantics;
 - callable late-import thunks backed by immutable RX code and separate RW target/counter slots; unresolved calls are counted and later bindings update stale thunk pointers without rewriting code;
-- a runtime-owned `libkernel` service slice registered through the same version-aware symbol path as guest exports: process-time/current-CPU queries, native-arena size and `mprotect`, deny-by-default read-only `/app0` `open`/`read`/`close`, and pthread mutex init/lock/unlock/destroy with separate POSIX and ORBIS error conventions;
+- a runtime-owned `libkernel` service slice registered through the same version-aware symbol path as guest exports: process-time/current-CPU queries, native-arena size and `mprotect`, deny-by-default read-only `/app0` `open`/`read`/`close`, pthread mutexes, condition variables, and a bounded pthread-attribute model with separate POSIX and ORBIS error conventions;
 - `Runtime::invoke_entry()` as a synchronous end-to-end path from a native-backed loaded module through guest stack/thread context to native entry execution;
-- POSIX guest fault capture for SIGSEGV/SIGBUS/SIGILL and Windows x64 vectored-exception recovery, both returning through the native entry recovery epilogue;
-- `GuestThread`/`Runtime::start_thread()` plus a runtime-owned thread manager, with `pthread_create`, `pthread_join`, `pthread_self`, and guest-semantic `pthread_detach` HLE for `libkernel` and `libScePosix`; the same thread scope carries `KernelServices` into child guest threads, and detached guest threads remain host-owned until completion/shutdown rather than escaping the runtime;
+- POSIX guest fault capture for SIGSEGV/SIGBUS/SIGILL and Windows x64 vectored-exception recovery, both returning through the native entry recovery epilogue; the same recovery route provides `pthread_exit` without C++ unwinding or cross-stack `longjmp`;
+- `GuestThread`/`Runtime::start_thread()` plus a runtime-owned thread manager, with `pthread_create`, `pthread_join`, `pthread_self`, `pthread_detach`, and `pthread_exit` HLE for `libkernel` and `libScePosix`; stack-size and detach-state attributes are consumed at create time, the same thread scope carries `KernelServices` into child guest threads, and detached guest threads remain host-owned until completion/shutdown rather than escaping the runtime;
 - a Windows x64 HLE bridge that remaps the first four SysV integer/pointer arguments to MS-x64 and switches C++ host calls back to the suspended OS thread stack instead of running substantial host code on the guest stack;
 - a bounds-checked PM4 packet frontend, GPU submission/timeline interface, and deterministic null backend;
 - unit tests and CI-ready CMake/CTest targets.
@@ -48,7 +48,7 @@ To inspect a legal, unencrypted x86-64 ELF test image:
 
 ## Near-term roadmap
 
-1. Add pthread attributes plus a dedicated safe guest-thread termination primitive before exposing `pthread_exit`; then add condition variables/semaphores and sleep APIs.
+1. Extend pthread synchronization with condition attributes/timed waits, semaphores, sleep/yield, and then cancellation/cleanup handlers; keep unsupported attribute families explicit rather than accepting them as no-ops.
 2. Extend the file layer with seek/stat and an explicit mount/write policy before enabling any guest file creation or mutation; extend memory HLE with real direct/flexible allocation semantics rather than hardware-size guesses.
 3. Grow Windows CPU-patch capacity beyond the current one-page near arena and cover rarer TCB operand forms.
 4. Module lifecycle: dependency loading, init/fini arrays, process parameters, and richer runtime-owned thread tracking.
