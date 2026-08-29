@@ -5,9 +5,9 @@
 #include <string>
 #include <unordered_map>
 
-#include "asteria/base/types.hpp"
+#include "nyxora/base/types.hpp"
 
-namespace asteria::runtime {
+namespace nyxora::runtime {
 
 enum class SymbolKind : std::uint8_t { unknown, function, object, tls, no_type };
 
@@ -43,4 +43,4 @@ private:
     std::unordered_map<SymbolKey, SymbolBinding, SymbolKeyHash> symbols_;
 };
 
-} // namespace asteria::runtime
+} // namespace nyxora::runtime

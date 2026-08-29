@@ -5,13 +5,13 @@
 #include <string>
 #include <vector>
 
-#include "asteria/base/types.hpp"
-#include "asteria/gpu/backend.hpp"
-#include "asteria/loader/elf64.hpp"
-#include "asteria/memory/guest_address_space.hpp"
-#include "asteria/runtime/symbol_registry.hpp"
+#include "nyxora/base/types.hpp"
+#include "nyxora/gpu/backend.hpp"
+#include "nyxora/loader/elf64.hpp"
+#include "nyxora/memory/guest_address_space.hpp"
+#include "nyxora/runtime/symbol_registry.hpp"
 
-namespace asteria::runtime {
+namespace nyxora::runtime {
 
 struct LoadedModule {
     std::filesystem::path path;
@@ -36,4 +36,4 @@ private:
     std::unique_ptr<gpu::Backend> gpu_;
 };
 
-} // namespace asteria::runtime
+} // namespace nyxora::runtime

@@ -5,7 +5,7 @@
 #include <span>
 #include <vector>
 
-namespace asteria::gpu::pm4 {
+namespace nyxora::gpu::pm4 {
 
 enum class PacketType : std::uint8_t { type0 = 0, type1 = 1, type2 = 2, type3 = 3 };
 
@@ -34,4 +34,4 @@ private:
 
 std::vector<PacketView> decode_all(std::span<const std::uint32_t> stream);
 
-} // namespace asteria::gpu::pm4
+} // namespace nyxora::gpu::pm4

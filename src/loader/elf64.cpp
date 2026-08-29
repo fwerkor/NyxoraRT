@@ -1,4 +1,4 @@
-#include "asteria/loader/elf64.hpp"
+#include "nyxora/loader/elf64.hpp"
 
 #include <algorithm>
 #include <array>
@@ -8,7 +8,7 @@
 #include <stdexcept>
 #include <type_traits>
 
-namespace asteria::loader {
+namespace nyxora::loader {
 namespace {
 
 #pragma pack(push, 1)
@@ -136,4 +136,4 @@ Elf64Image Elf64Image::from_bytes(std::vector<std::byte> bytes) {
     return image;
 }
 
-} // namespace asteria::loader
+} // namespace nyxora::loader

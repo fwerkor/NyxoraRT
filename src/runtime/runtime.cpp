@@ -1,9 +1,9 @@
-#include "asteria/runtime/runtime.hpp"
+#include "nyxora/runtime/runtime.hpp"
 
 #include <algorithm>
 #include <stdexcept>
 
-namespace asteria::runtime {
+namespace nyxora::runtime {
 namespace {
 memory::Protection segment_protection(std::uint32_t flags) {
     memory::Protection protection = memory::Protection::none;
@@ -55,4 +55,4 @@ LoadedModule Runtime::load_elf(const std::filesystem::path& path, GuestAddress b
     return module;
 }
 
-} // namespace asteria::runtime
+} // namespace nyxora::runtime

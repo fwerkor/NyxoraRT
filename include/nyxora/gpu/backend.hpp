@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <span>
 
-namespace asteria::gpu {
+namespace nyxora::gpu {
 
 struct SubmissionStats {
     std::uint64_t graphics_submissions{};
@@ -20,4 +20,4 @@ public:
     virtual void wait(std::uint64_t timeline_value) = 0;
 };
 
-} // namespace asteria::gpu
+} // namespace nyxora::gpu

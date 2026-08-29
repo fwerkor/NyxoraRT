@@ -2,7 +2,7 @@
 
 ## Core principle
 
-The target console family and desktop PCs share x86-64 CPU semantics. AsteriaRT therefore treats CPU emulation as an exception, not the default. The desired steady-state path is:
+The target console family and desktop PCs share x86-64 CPU semantics. NyxoraRT therefore treats CPU emulation as an exception, not the default. The desired steady-state path is:
 
 ```text
 Guest executable

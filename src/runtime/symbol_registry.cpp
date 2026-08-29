@@ -1,8 +1,8 @@
-#include "asteria/runtime/symbol_registry.hpp"
+#include "nyxora/runtime/symbol_registry.hpp"
 
 #include <functional>
 
-namespace asteria::runtime {
+namespace nyxora::runtime {
 namespace {
 void hash_combine(std::size_t& seed, std::size_t value) noexcept {
     seed ^= value + 0x9e3779b97f4a7c15ULL + (seed << 6U) + (seed >> 2U);
@@ -33,4 +33,4 @@ std::optional<SymbolBinding> SymbolRegistry::resolve(const SymbolKey& key) const
     return it->second;
 }
 
-} // namespace asteria::runtime
+} // namespace nyxora::runtime

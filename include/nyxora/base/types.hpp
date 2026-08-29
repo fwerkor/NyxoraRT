@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-namespace asteria {
+namespace nyxora {
 using GuestAddress = std::uint64_t;
 using GuestSize = std::uint64_t;
 }

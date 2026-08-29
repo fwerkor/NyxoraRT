@@ -1,6 +1,6 @@
-# AsteriaRT
+# NyxoraRT
 
-AsteriaRT is an experimental high-performance **x86-64 console user-mode compatibility runtime**. Its core design goal is to avoid full CPU emulation where the guest and host ISA already match, while translating operating-system ABI and GPU behavior into portable host implementations.
+NyxoraRT is an experimental high-performance **x86-64 console user-mode compatibility runtime**. Its core design goal is to avoid full CPU emulation where the guest and host ISA already match, while translating operating-system ABI and GPU behavior into portable host implementations.
 
 The project is intentionally early. It does **not** currently run commercial console games.
 
@@ -31,7 +31,7 @@ ctest --test-dir build --output-on-failure
 To inspect a legal, unencrypted x86-64 ELF test image:
 
 ```bash
-./build/asteria ./path/to/test.elf
+./build/nyxora ./path/to/test.elf
 ```
 
 ## Near-term roadmap
@@ -48,7 +48,7 @@ See [`docs/architecture.md`](docs/architecture.md) and [`docs/research-notes.md`
 
 ## Scope and legal boundary
 
-AsteriaRT is intended for interoperability research, homebrew, and legally obtained/decrypted test inputs. The project will not include console keys, DRM bypasses, copyrighted firmware, or game assets.
+NyxoraRT is intended for interoperability research, homebrew, and legally obtained/decrypted test inputs. The project will not include console keys, DRM bypasses, copyrighted firmware, or game assets.
 
 ## License
 

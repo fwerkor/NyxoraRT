@@ -7,9 +7,9 @@
 #include <string>
 #include <vector>
 
-#include "asteria/base/types.hpp"
+#include "nyxora/base/types.hpp"
 
-namespace asteria::memory {
+namespace nyxora::memory {
 
 enum class Protection : std::uint8_t {
     none = 0,
@@ -55,4 +55,4 @@ private:
     std::map<GuestAddress, Region> regions_;
 };
 
-} // namespace asteria::memory
+} // namespace nyxora::memory

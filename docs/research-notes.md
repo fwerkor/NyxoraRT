@@ -1,6 +1,6 @@
 # Reference-code study
 
-These notes capture architectural observations from public emulator source trees inspected before the first AsteriaRT commit. They are design references, not copied code.
+These notes capture architectural observations from public emulator source trees inspected before the first NyxoraRT commit. They are design references, not copied code.
 
 ## KytyPS5
 
@@ -34,13 +34,13 @@ Useful observations:
 
 - RPCSX contains substantially more kernel/system modeling than the other references and explicitly distinguishes PS4 and PS5 process/syscall vectors.
 - The VM layer integrates guest faults and GPU page state, showing that eventual GPU coherency work cannot be solved solely in the renderer.
-- For AsteriaRT, this is primarily a behavioral/reference source. Adopting its full-system architecture would work against the narrower user-mode/HLE goal.
+- For NyxoraRT, this is primarily a behavioral/reference source. Adopting its full-system architecture would work against the narrower user-mode/HLE goal.
 
-## Resulting AsteriaRT decisions
+## Resulting NyxoraRT decisions
 
 1. Keep parsing, runtime linking, memory policy, and GPU translation as separate libraries/subsystems.
 2. Make direct x86-64 execution the architectural center; do not start from a CPU interpreter.
 3. Make symbol keys version-aware from day one.
 4. Build a deterministic GPU submission interface before Vulkan implementation.
 5. Keep title quirks out of core primitives.
-6. Implement new code independently. No source from the GPL reference projects is incorporated into AsteriaRT.
+6. Implement new code independently. No source from the GPL reference projects is incorporated into NyxoraRT.

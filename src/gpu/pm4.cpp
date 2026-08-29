@@ -1,8 +1,8 @@
-#include "asteria/gpu/pm4.hpp"
+#include "nyxora/gpu/pm4.hpp"
 
 #include <stdexcept>
 
-namespace asteria::gpu::pm4 {
+namespace nyxora::gpu::pm4 {
 
 PacketView Decoder::next() {
     if (done()) {
@@ -61,4 +61,4 @@ std::vector<PacketView> decode_all(std::span<const std::uint32_t> stream) {
     return packets;
 }
 
-} // namespace asteria::gpu::pm4
+} // namespace nyxora::gpu::pm4

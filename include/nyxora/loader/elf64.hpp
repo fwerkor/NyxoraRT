@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace asteria::loader {
+namespace nyxora::loader {
 
 inline constexpr std::uint16_t kMachineX86_64 = 62;
 inline constexpr std::uint16_t kTypeExec = 2;
@@ -54,4 +54,4 @@ private:
     std::uint64_t entry_{};
 };
 
-} // namespace asteria::loader
+} // namespace nyxora::loader

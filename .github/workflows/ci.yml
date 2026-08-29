@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Configure
-        run: cmake -S . -B build -DASTERIA_ENABLE_WERROR=ON
+        run: cmake -S . -B build -DNYXORA_ENABLE_WERROR=ON
       - name: Build
         run: cmake --build build --config Release --parallel
       - name: Test

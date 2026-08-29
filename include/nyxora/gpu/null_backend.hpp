@@ -1,8 +1,8 @@
 #pragma once
 
-#include "asteria/gpu/backend.hpp"
+#include "nyxora/gpu/backend.hpp"
 
-namespace asteria::gpu {
+namespace nyxora::gpu {
 
 class NullBackend final : public Backend {
 public:
@@ -20,4 +20,4 @@ private:
     std::uint64_t completed_timeline_{};
 };
 
-} // namespace asteria::gpu
+} // namespace nyxora::gpu

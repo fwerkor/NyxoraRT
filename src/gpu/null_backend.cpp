@@ -1,8 +1,8 @@
-#include "asteria/gpu/null_backend.hpp"
+#include "nyxora/gpu/null_backend.hpp"
 
 #include <algorithm>
 
-namespace asteria::gpu {
+namespace nyxora::gpu {
 
 void NullBackend::submit_graphics(std::span<const std::uint32_t> command_stream) {
     ++stats_.graphics_submissions;
@@ -22,4 +22,4 @@ void NullBackend::wait(std::uint64_t timeline_value) {
     completed_timeline_ = std::max(completed_timeline_, std::min(timeline_value, timeline_));
 }
 
-} // namespace asteria::gpu
+} // namespace nyxora::gpu

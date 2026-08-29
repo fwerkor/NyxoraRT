@@ -1,10 +1,10 @@
-#include "asteria/memory/guest_address_space.hpp"
+#include "nyxora/memory/guest_address_space.hpp"
 
 #include <algorithm>
 #include <cstring>
 #include <limits>
 
-namespace asteria::memory {
+namespace nyxora::memory {
 namespace {
 bool end_address(GuestAddress base, GuestSize size, GuestAddress& end) {
     if (size == 0 || base > std::numeric_limits<GuestAddress>::max() - size) {
@@ -134,4 +134,4 @@ std::vector<RegionInfo> GuestAddressSpace::regions() const {
     return result;
 }
 
-} // namespace asteria::memory
+} // namespace nyxora::memory

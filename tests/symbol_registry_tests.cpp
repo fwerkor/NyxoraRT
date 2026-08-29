@@ -1,15 +1,15 @@
 #include "test.hpp"
-#include "asteria/runtime/symbol_registry.hpp"
+#include "nyxora/runtime/symbol_registry.hpp"
 
-ASTERIA_TEST(symbol_registry_keys_include_library_and_module) {
-    using namespace asteria::runtime;
+NYXORA_TEST(symbol_registry_keys_include_library_and_module) {
+    using namespace nyxora::runtime;
     SymbolRegistry registry;
     SymbolKey key{"abc", "libKernel", "libkernel", 1, 1, 0, SymbolKind::function};
-    ASTERIA_CHECK(registry.register_symbol(key, {0x1234, "sceExample", true}));
+    NYXORA_CHECK(registry.register_symbol(key, {0x1234, "sceExample", true}));
     auto result = registry.resolve(key);
-    ASTERIA_CHECK(result.has_value());
-    ASTERIA_CHECK(result->address == 0x1234);
+    NYXORA_CHECK(result.has_value());
+    NYXORA_CHECK(result->address == 0x1234);
     auto different = key;
     different.library = "other";
-    ASTERIA_CHECK(!registry.resolve(different).has_value());
+    NYXORA_CHECK(!registry.resolve(different).has_value());
 }
