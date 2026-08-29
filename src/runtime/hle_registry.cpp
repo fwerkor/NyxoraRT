@@ -68,8 +68,10 @@ public:
 private:
     static constexpr std::size_t kThunkSize = 32;
 
+#if defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
     NoArgBridgeTable(memory::NativeArena arena, std::size_t capacity, GuestSize data_offset)
         : arena_(std::move(arena)), capacity_(capacity), data_offset_(data_offset) {}
+#endif
 
     bool emit_all() {
 #if defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
@@ -110,10 +112,12 @@ private:
 #endif
     }
 
+#if defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
     memory::NativeArena arena_;
     std::size_t capacity_{};
     std::size_t used_{};
     GuestSize data_offset_{};
+#endif
 };
 
 HleRegistry::~HleRegistry() = default;

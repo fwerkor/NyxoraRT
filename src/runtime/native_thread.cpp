@@ -186,7 +186,7 @@ std::uint64_t EntryTrampoline::invoke(GuestAddress entry, GuestAddress stack_top
     }
     using HostThunk = std::uint64_t (*)(GuestAddress, GuestAddress, std::uint64_t, std::uint64_t,
                                         std::uint64_t);
-    const auto function = reinterpret_cast<HostThunk>(code_.host_pointer());
+    const auto function = reinterpret_cast<HostThunk>(const_cast<void*>(code_.host_pointer()));
     return function(entry, stack_top, arg0, arg1, arg2);
 }
 
