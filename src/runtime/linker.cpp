@@ -175,7 +175,10 @@ RelocationReport RuntimeLinker::relocate(GuestAddress module_base, std::uint32_t
             }
 
             std::optional<std::uint64_t> value;
+            std::optional<SymbolKey> key;
             bool weak = false;
+            bool unresolved = false;
+            GuestAddress thunk_address = 0;
             std::string symbol_name;
 
             switch (relocation.type()) {
@@ -185,6 +188,8 @@ RelocationReport RuntimeLinker::relocate(GuestAddress module_base, std::uint32_t
             case loader::kRelocationX86_64DtpMod64:
                 if (tls_module_id != 0) {
                     value = tls_module_id;
+                } else {
+                    unresolved = true;
                 }
                 break;
             case loader::kRelocationX86_64_64:
@@ -197,12 +202,29 @@ RelocationReport RuntimeLinker::relocate(GuestAddress module_base, std::uint32_t
                 const auto& symbol = dynamic.symbols[symbol_index];
                 symbol_name = symbol.name;
                 weak = symbol.binding() == loader::kSymbolBindWeak;
+                key = make_symbol_key(dynamic, symbol);
                 const auto resolved = resolve_symbol(module_base, dynamic, symbol);
                 if (resolved) {
                     const auto addend = relocation.type() == loader::kRelocationX86_64_64
                                             ? relocation.addend
                                             : std::int64_t{0};
                     value = add_signed(*resolved, addend);
+                    if (value && late_imports_ != nullptr) {
+                        (void)late_imports_->bind_patch(*patch_address, *value);
+                    }
+                } else {
+                    unresolved = true;
+                    const bool callable = symbol.type() == loader::kSymbolTypeFunction ||
+                                          symbol.type() == loader::kSymbolTypeNoType;
+                    if (callable && key && late_imports_ != nullptr) {
+                        const auto thunk =
+                            late_imports_->get_or_create(*patch_address, *key, symbol.name);
+                        if (thunk) {
+                            value = *thunk;
+                            thunk_address = *thunk;
+                            ++report.late_thunks;
+                        }
+                    }
                 }
                 break;
             }
@@ -210,15 +232,18 @@ RelocationReport RuntimeLinker::relocate(GuestAddress module_base, std::uint32_t
                 throw std::runtime_error("unsupported x86-64 relocation type");
             }
 
-            if (!value) {
+            if (unresolved) {
                 report.unresolved.push_back(UnresolvedRelocation{
                     .patch_address = *patch_address,
                     .type = relocation.type(),
                     .symbol_index = relocation.symbol_index(),
-                    .symbol_name = std::move(symbol_name),
+                    .symbol_name = symbol_name,
                     .weak = weak,
                     .plt = plt,
+                    .thunk_address = thunk_address,
                 });
+            }
+            if (!value) {
                 continue;
             }
             if (!patch_u64(memory_, *patch_address, *value)) {

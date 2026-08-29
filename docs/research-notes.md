@@ -50,3 +50,9 @@ Useful observations:
 The first implementation derived only format and architectural facts from the references, then reimplemented the behavior independently. NyxoraRT now parses SCE dynamic-table offsets from `PT_SCE_DYNLIBDATA`, decodes packed module/library identifiers, models PT_TLS metadata, applies the core x86-64 RELA forms used by the references, and keeps unresolved imports retryable.
 
 The memory layer now has an identity-mapped native arena in addition to deterministic buffered storage. The same runtime-linker tests run against the shared memory policy, and an end-to-end synthetic SCE fixture verifies load -> relocate -> W^X protection -> native entry execution without introducing a CPU interpreter.
+
+## Guest-thread and late-import milestone
+
+Further study of the public reference implementations reinforced three design choices. First, guest-stack switching is a runtime concern independent of ELF parsing. Second, x86-64 console TLS should not be modeled by overwriting the host process TLS model; NyxoraRT now keeps explicit per-thread PT_TLS images while segment-base binding remains a separate next step. Third, unresolved callable imports benefit from stable tail-jump thunks whose writable target state is separated from executable code.
+
+NyxoraRT now has its own generated x86-64 entry trampoline, guarded guest stacks, per-thread TLS images, stable late-import thunks, and an initial `libkernel` HLE registry. Reference projects were used to establish public ABI/format facts and NID/version metadata; the implementation remains independent and no GPL source is incorporated.

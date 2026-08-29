@@ -38,19 +38,27 @@ Memory metadata must remain independent of the Vulkan caches. GPU dirty tracking
 
 A symbol is not identified by a NID alone. Resolution includes library/module identity, versions, and symbol kind. The current linker resolves local definitions, loaded guest exports, and registered HLE bindings using NID + library/module identity + versions + symbol kind. Guest exports may replace an HLE binding for the same exact key. Missing imports are preserved in a `RelocationReport`, and the module can be relinked after another module or HLE implementation becomes available.
 
-The next step is callable late-binding thunks: unresolved functions should be able to survive initial relocation and produce a precise first-use diagnostic while still allowing later resolution.
+Unresolved callable imports can now be patched to a stable late-binding thunk. Each thunk has immutable RX code and a separate RW slot containing its eventual target and an unresolved-call counter. Before binding it returns a deterministic zero value and records first use; after a symbol becomes available, relinking updates both the original relocation and the thunk target so cached thunk pointers remain valid.
 
 ### Native CPU execution
 
-The native-memory path is now capable of loading, relocating, changing page protections, and directly executing a synthetic SCE x86-64 entry point. A real guest process still requires more than jumping to that entry point. The native executor will own:
+The native-memory path can load and relocate a synthetic SCE image, build a guarded guest stack, switch `RSP`/`RBP`, present the guest SysV argument convention, and return safely to the host. `Runtime::invoke_entry()` composes this with a per-thread runtime context. On Windows x64 the generated entry bridge preserves Microsoft-ABI nonvolatile GPR/XMM state while entering SysV guest code.
 
-- guest stack creation and stack switching;
-- SysV calling-convention entry/exit trampolines;
-- FS/TLS handling per guest thread;
+PT_TLS templates are registered per loaded module. Each guest thread receives its own aligned copy of initialized TLS bytes plus zeroed TLS BSS. The current thread context is explicit and nestable; it deliberately does not replace the host FS/GS base yet. Real binaries that directly issue segment-relative TLS accesses therefore still need the segment/TLS binding layer.
+
+The next native-execution work is:
+
+- safe guest segment/TLS binding without corrupting host runtime TLS;
 - signal/exception routing for guest faults;
+- persistent guest-thread ownership and creation/join;
+- Windows host-call stack switching for HLE functions that may probe or consume substantial stack;
 - a narrow fallback mechanism for instructions or behaviors that cannot execute directly.
 
 The CPU layer must not become a general DBT unless evidence shows it is necessary.
+
+### Initial libkernel HLE
+
+The HLE registry shares the same `SymbolKey` space as guest exports. The first registered `libkernel` functions cover process time, process-time counter/frequency, and current-CPU queries. On SysV x86-64 hosts these bindings can point directly at host implementations. Windows uses a generated guest-SysV-to-host-MS-x64 no-argument bridge with shadow-space handling; wider signatures will use explicit ABI bridge families rather than unsafe function-pointer casts.
 
 ### GPU
 

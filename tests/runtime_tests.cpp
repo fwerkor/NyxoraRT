@@ -3,6 +3,7 @@
 #include "nyxora/gpu/null_backend.hpp"
 #include "nyxora/runtime/runtime.hpp"
 
+#include <array>
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -93,5 +94,74 @@ NYXORA_TEST(runtime_can_load_and_execute_synthetic_sce_entry_natively) {
     using Entry = int (*)();
     auto entry = reinterpret_cast<Entry>(module.entry);
     NYXORA_CHECK(entry() == 42);
+#endif
+}
+
+NYXORA_TEST(runtime_installs_callable_late_import_and_rebinds_it) {
+#if defined(__x86_64__) || defined(_M_X64)
+    constexpr nyxora::GuestAddress base = 0x600000000ULL;
+    nyxora::runtime::Runtime runtime(std::make_unique<nyxora::gpu::NullBackend>());
+    const auto image = nyxora::loader::Elf64Image::from_bytes(test_fixture::sce_dynamic_elf());
+    auto module = runtime.load_image(image, "late-fixture.elf", base);
+
+    NYXORA_CHECK(module.relocations.unresolved.size() == 1);
+    NYXORA_CHECK(module.relocations.late_thunks == 1);
+    const auto thunk = module.relocations.unresolved[0].thunk_address;
+    NYXORA_CHECK(thunk != 0);
+    NYXORA_CHECK(runtime_read_u64(runtime, base + 0x1008) == thunk);
+    const auto* table = runtime.late_imports();
+    NYXORA_CHECK(table != nullptr);
+    NYXORA_CHECK(table->size() == 1);
+
+    using Function = std::uint64_t (*)();
+    NYXORA_CHECK(reinterpret_cast<Function>(thunk)() == 0);
+    NYXORA_CHECK(table->call_count(0) == 1);
+
+    const auto page = nyxora::memory::NativeArena::page_size();
+    auto target = nyxora::memory::NativeArena::reserve(page);
+    NYXORA_CHECK(target.has_value());
+    NYXORA_CHECK(target->protect(0, page,
+                                 nyxora::memory::Protection::read |
+                                     nyxora::memory::Protection::write));
+    const std::array<std::byte, 11> return_91{
+        std::byte{0x48}, std::byte{0xb8}, std::byte{0x5b}, std::byte{0x00}, std::byte{0x00},
+        std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
+        std::byte{0xc3},
+    };
+    NYXORA_CHECK(target->copy(0, return_91));
+    NYXORA_CHECK(target->flush_instruction_cache(0, return_91.size()));
+    NYXORA_CHECK(target->protect(0, page,
+                                 nyxora::memory::Protection::read |
+                                     nyxora::memory::Protection::execute));
+    const auto target_address =
+        reinterpret_cast<nyxora::GuestAddress>(target->host_pointer());
+    NYXORA_CHECK(runtime.symbols().register_symbol(
+        runtime_import_key(), nyxora::runtime::SymbolBinding{target_address, "late target", true}));
+
+    const auto report = runtime.relink(module);
+    NYXORA_CHECK(report.unresolved.empty());
+    NYXORA_CHECK(runtime_read_u64(runtime, base + 0x1008) == target_address);
+    NYXORA_CHECK(reinterpret_cast<Function>(thunk)() == 91);
+    NYXORA_CHECK(table->call_count(0) == 1);
+#endif
+}
+
+NYXORA_TEST(runtime_invoke_entry_uses_native_guest_thread_path) {
+#if defined(__x86_64__) || defined(_M_X64)
+    const auto page = nyxora::memory::NativeArena::page_size();
+    auto memory = nyxora::memory::GuestAddressSpace::reserve_native(page * 3U);
+    NYXORA_CHECK(memory.has_value());
+    const auto base = memory->native_base();
+
+    nyxora::runtime::Runtime runtime(std::make_unique<nyxora::gpu::NullBackend>(),
+                                     std::move(*memory));
+    NYXORA_CHECK(runtime.symbols().register_symbol(
+        runtime_import_key(), nyxora::runtime::SymbolBinding{0x12345678, "unused HLE", true}));
+    const auto image = nyxora::loader::Elf64Image::from_bytes(test_fixture::sce_dynamic_elf());
+    const auto module = runtime.load_image(image, "invoke-fixture.elf", base);
+
+    NYXORA_CHECK(nyxora::runtime::ScopedGuestThreadContext::current() == nullptr);
+    NYXORA_CHECK(runtime.invoke_entry(module, 64 * 1024) == 42);
+    NYXORA_CHECK(nyxora::runtime::ScopedGuestThreadContext::current() == nullptr);
 #endif
 }

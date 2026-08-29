@@ -18,12 +18,6 @@
 namespace nyxora::memory {
 namespace {
 
-std::optional<GuestSize> round_up(GuestSize value, GuestSize alignment) {
-    if (alignment == 0 || value == 0 || value > std::numeric_limits<GuestSize>::max() - (alignment - 1)) {
-        return std::nullopt;
-    }
-    return (value + alignment - 1) / alignment * alignment;
-}
 
 #if defined(_WIN32)
 DWORD windows_protection(Protection protection) {
@@ -96,7 +90,7 @@ bool NativeArena::exact_reservation_supported() noexcept {
 
 std::optional<NativeArena> NativeArena::reserve(GuestSize size, GuestAddress preferred_base) {
     const auto page = static_cast<GuestSize>(page_size());
-    const auto rounded_size = round_up(size, page);
+    const auto rounded_size = checked_align_up(size, page);
     if (!rounded_size || (preferred_base != 0 && preferred_base % page != 0)) {
         return std::nullopt;
     }
@@ -141,7 +135,7 @@ bool NativeArena::protect(GuestSize offset, GuestSize size, Protection protectio
     if (offset % page != 0 || offset > size_) {
         return false;
     }
-    const auto rounded_size = round_up(size, page);
+    const auto rounded_size = checked_align_up(size, page);
     if (!rounded_size || *rounded_size > size_ - offset) {
         return false;
     }
@@ -161,6 +155,21 @@ bool NativeArena::copy(GuestSize offset, std::span<const std::byte> bytes) {
     }
     std::memcpy(reinterpret_cast<void*>(base_ + offset), bytes.data(), bytes.size());
     return true;
+}
+
+bool NativeArena::flush_instruction_cache(GuestSize offset, GuestSize size) noexcept {
+    if (base_ == 0 || offset > size_ || size > size_ - offset) {
+        return false;
+    }
+    auto* begin = reinterpret_cast<char*>(base_ + offset);
+#if defined(_WIN32)
+    return FlushInstructionCache(GetCurrentProcess(), begin, static_cast<SIZE_T>(size)) != 0;
+#elif defined(__GNUC__) || defined(__clang__)
+    __builtin___clear_cache(begin, begin + static_cast<std::ptrdiff_t>(size));
+    return true;
+#else
+    return true;
+#endif
 }
 
 void* NativeArena::host_pointer(GuestSize offset) noexcept {

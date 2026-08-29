@@ -22,7 +22,11 @@ The initial framework already provides:
 - a version-aware NID/library/module symbol registry for HLE functions and loaded guest exports;
 - a runtime linker for `R_X86_64_64`, `GLOB_DAT`, `JUMP_SLOT`, `RELATIVE`, and `DTPMOD64`, including retryable unresolved imports;
 - buffered and identity-mapped native guest memory with W^X transitions during loading/relocation;
-- direct execution of a linked synthetic x86-64 SCE entry point in the test suite;
+- guarded guest stacks plus an x86-64 entry trampoline that switches `RSP`/`RBP` and presents SysV guest arguments on Linux, macOS x86-64, and Windows x64;
+- per-thread PT_TLS images with original alignment, initialized bytes, zeroed TLS BSS, and a scoped runtime thread context;
+- callable late-import thunks backed by immutable RX code and separate RW target/counter slots; unresolved calls are counted and later bindings update stale thunk pointers without rewriting code;
+- a first `libkernel` HLE slice for process-time counters/frequency and current-CPU queries, registered through the same version-aware symbol path as guest exports;
+- `Runtime::invoke_entry()` as a synchronous end-to-end path from a native-backed loaded module through guest stack/thread context to native entry execution;
 - a bounds-checked PM4 packet frontend, GPU submission/timeline interface, and deterministic null backend;
 - unit tests and CI-ready CMake/CTest targets.
 
@@ -40,9 +44,9 @@ To inspect a legal, unencrypted x86-64 ELF test image:
 
 ## Near-term roadmap
 
-1. Guest-stack entry trampoline, per-thread TLS/FS context, and fault routing.
-2. Callable late-import thunks so missing functions can be diagnosed at first use rather than only during relinking.
-3. `libkernel` HLE substrate: memory, files, synchronization, time, and threads.
+1. Guest segment/TLS binding and fault routing without disturbing host runtime TLS; Windows host-call stack switching for larger HLE functions.
+2. Expand `libkernel` HLE into memory, files, synchronization, sleep/time, and real guest-thread creation/join.
+3. Module lifecycle: dependency loading, init/fini arrays, process parameters, and persistent guest-thread ownership.
 4. PM4 command processor with deterministic tracing and state tracking.
 5. Shader frontend -> typed IR -> SPIR-V backend and persistent shader/pipeline cache.
 6. Vulkan resource tracking, synchronization, presentation, and performance tooling.

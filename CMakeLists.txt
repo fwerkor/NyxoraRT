@@ -9,11 +9,16 @@ add_library(nyxora_core
     src/loader/dynamic.cpp
     src/runtime/symbol_registry.cpp
     src/runtime/linker.cpp
+    src/runtime/late_imports.cpp
+    src/runtime/hle_registry.cpp
+    src/runtime/native_thread.cpp
+    src/runtime/tls.cpp
     src/memory/guest_address_space.cpp
     src/memory/native_arena.cpp
     src/gpu/null_backend.cpp
     src/gpu/pm4.cpp
     src/runtime/runtime.cpp
+    src/hle/libkernel.cpp
 )
 add_library(NyxoraRT::core ALIAS nyxora_core)
 
@@ -43,9 +48,13 @@ if(NYXORA_BUILD_TESTS)
         tests/dynamic_tests.cpp
         tests/symbol_registry_tests.cpp
         tests/linker_tests.cpp
+        tests/late_import_tests.cpp
+        tests/hle_tests.cpp
         tests/runtime_tests.cpp
         tests/guest_address_space_tests.cpp
         tests/native_arena_tests.cpp
+        tests/native_thread_tests.cpp
+        tests/tls_tests.cpp
         tests/gpu_backend_tests.cpp
         tests/pm4_tests.cpp
     )

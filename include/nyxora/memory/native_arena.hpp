@@ -31,6 +31,7 @@ public:
 
     bool protect(GuestSize offset, GuestSize size, Protection protection);
     bool copy(GuestSize offset, std::span<const std::byte> bytes);
+    bool flush_instruction_cache(GuestSize offset, GuestSize size) noexcept;
 
     [[nodiscard]] void* host_pointer(GuestSize offset = 0) noexcept;
     [[nodiscard]] const void* host_pointer(GuestSize offset = 0) const noexcept;
