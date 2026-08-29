@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <unordered_map>
 
 #include "nyxora/base/types.hpp"
@@ -19,6 +20,7 @@ public:
     static constexpr int kPosixEagain = 35;
 
     explicit GuestThreadManager(const TlsRegistry& tls_registry) : tls_registry_(tls_registry) {}
+    ~GuestThreadManager();
 
     GuestThreadManager(const GuestThreadManager&) = delete;
     GuestThreadManager& operator=(const GuestThreadManager&) = delete;
@@ -26,28 +28,37 @@ public:
     int create(GuestAddress* handle_out, GuestAddress attributes, GuestAddress start_routine,
                GuestAddress argument, GuestSize stack_size = 1024 * 1024);
     int join(GuestAddress handle, GuestAddress* return_value);
+    int detach(GuestAddress handle);
 
-    [[nodiscard]] std::size_t size() const noexcept;
+    [[nodiscard]] std::size_t size();
+    [[nodiscard]] GuestAddress root_handle() const noexcept {
+        return reinterpret_cast<GuestAddress>(this);
+    }
     [[nodiscard]] static GuestThreadManager* current() noexcept;
+    [[nodiscard]] static GuestAddress current_handle() noexcept;
 
 private:
     friend class ScopedGuestThreadManager;
 
     struct Record {
-        explicit Record(GuestThread thread_in) : thread(std::move(thread_in)) {}
-        GuestThread thread;
+        std::optional<GuestThread> thread;
+        bool detached{};
     };
+
+    void reap_finished_detached_locked();
 
     const TlsRegistry& tls_registry_;
     mutable std::mutex mutex_;
     std::unordered_map<GuestAddress, std::unique_ptr<Record>> threads_;
+    bool shutting_down_{};
 };
 
 class ScopedGuestThreadManager {
 public:
-    explicit ScopedGuestThreadManager(GuestThreadManager* manager) noexcept;
+    explicit ScopedGuestThreadManager(GuestThreadManager* manager,
+                                      GuestAddress thread_handle = 0) noexcept;
     explicit ScopedGuestThreadManager(GuestThreadManager& manager) noexcept
-        : ScopedGuestThreadManager(&manager) {}
+        : ScopedGuestThreadManager(&manager, manager.root_handle()) {}
     ~ScopedGuestThreadManager();
 
     ScopedGuestThreadManager(const ScopedGuestThreadManager&) = delete;
@@ -55,6 +66,7 @@ public:
 
 private:
     GuestThreadManager* previous_{};
+    GuestAddress previous_handle_{};
 };
 
 } // namespace nyxora::runtime

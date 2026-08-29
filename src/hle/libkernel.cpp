@@ -51,6 +51,18 @@ std::uint64_t pthread_join(std::uint64_t thread, std::uint64_t return_value) {
         return_value == 0 ? nullptr : reinterpret_cast<GuestAddress*>(return_value)));
 }
 
+std::uint64_t pthread_self() {
+    return static_cast<std::uint64_t>(runtime::GuestThreadManager::current_handle());
+}
+
+std::uint64_t pthread_detach(std::uint64_t thread) {
+    auto* manager = runtime::GuestThreadManager::current();
+    if (manager == nullptr) {
+        return runtime::GuestThreadManager::kPosixEinval;
+    }
+    return static_cast<std::uint64_t>(manager->detach(static_cast<GuestAddress>(thread)));
+}
+
 runtime::SymbolKey key(const char* nid, const char* library = "libkernel") {
     return runtime::SymbolKey{
         .nid = nid,
@@ -77,11 +89,17 @@ void register_core(runtime::HleRegistry& registry) {
 
     const auto create_address = reinterpret_cast<GuestAddress>(&pthread_create);
     const auto join_address = reinterpret_cast<GuestAddress>(&pthread_join);
+    const auto self_address = reinterpret_cast<GuestAddress>(&pthread_self);
+    const auto detach_address = reinterpret_cast<GuestAddress>(&pthread_detach);
     for (const char* library : {"libkernel", "libScePosix"}) {
         (void)registry.register_function(key("OxhIB8LB-PQ", library), create_address,
                                          "pthread_create");
         (void)registry.register_function(key("h9CcP3J0oVM", library), join_address,
                                          "pthread_join");
+        (void)registry.register_function(key("EotR8a3ASf4", library), self_address,
+                                         "pthread_self");
+        (void)registry.register_function(key("+U1R4WtXvoc", library), detach_address,
+                                         "pthread_detach");
     }
 }
 

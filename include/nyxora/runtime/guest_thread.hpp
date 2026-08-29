@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <exception>
 #include <memory>
@@ -28,9 +29,12 @@ public:
     [[nodiscard]] static std::optional<GuestThread> start(
         const TlsRegistry& tls_registry, GuestAddress entry, GuestSize stack_size,
         std::uint64_t arg0 = 0, std::uint64_t arg1 = 0, std::uint64_t arg2 = 0,
-        GuestThreadManager* thread_manager = nullptr);
+        GuestThreadManager* thread_manager = nullptr, GuestAddress thread_handle = 0);
 
     [[nodiscard]] bool joinable() const noexcept { return worker_.joinable(); }
+    [[nodiscard]] bool finished() const noexcept {
+        return state_ != nullptr && state_->finished.load(std::memory_order_acquire);
+    }
     GuestInvocationResult join();
 
 private:
@@ -44,6 +48,7 @@ private:
         GuestThreadContext context;
         GuestInvocationResult result;
         std::exception_ptr host_exception;
+        std::atomic<bool> finished{false};
     };
 
     GuestThread(std::unique_ptr<State> state, std::thread worker)

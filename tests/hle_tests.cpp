@@ -72,7 +72,7 @@ NYXORA_TEST(libkernel_core_registers_process_time_and_cpu_hle) {
     nyxora::runtime::SymbolRegistry symbols;
     nyxora::runtime::HleRegistry hle(symbols);
     nyxora::hle::libkernel::register_core(hle);
-    NYXORA_CHECK(hle.size() == 8);
+    NYXORA_CHECK(hle.size() == 12);
 
     const auto frequency = symbols.resolve(libkernel_key("BNowx2l588E"));
     const auto cpu = symbols.resolve(libkernel_key("g0VTBxfJyu0"));
@@ -164,8 +164,10 @@ NYXORA_TEST(libkernel_pthread_create_and_join_work_through_guest_hle_calls) {
 
     const auto create_binding = symbols.resolve(libkernel_key("OxhIB8LB-PQ"));
     const auto join_binding = symbols.resolve(libkernel_key("h9CcP3J0oVM"));
+    const auto self_binding = symbols.resolve(libkernel_key("EotR8a3ASf4"));
     NYXORA_CHECK(create_binding.has_value());
     NYXORA_CHECK(join_binding.has_value());
+    NYXORA_CHECK(self_binding.has_value());
 
     const auto page = nyxora::memory::NativeArena::page_size();
     auto code = nyxora::memory::NativeArena::reserve(page);
@@ -174,11 +176,24 @@ NYXORA_TEST(libkernel_pthread_create_and_join_work_through_guest_hle_calls) {
                                nyxora::memory::Protection::read |
                                    nyxora::memory::Protection::write));
 
-    // Child start routine: return its single pointer/integer argument.
-    const std::array<std::byte, 4> child_code{
-        std::byte{0x48}, std::byte{0x89}, std::byte{0xf8}, std::byte{0xc3},
-    };
-    NYXORA_CHECK(code->copy(0, child_code));
+    // Child start routine: call pthread_self and return its opaque handle.
+    std::array<std::byte, 32> child_code{};
+    child_code.fill(std::byte{0x90});
+    std::size_t child_at = 0;
+    emit_mov_imm64(child_code, child_at, std::byte{0xb8}, self_binding->address);
+    NYXORA_CHECK(child_code.size() - child_at >= 11);
+    child_code[child_at++] = std::byte{0x48};
+    child_code[child_at++] = std::byte{0x83};
+    child_code[child_at++] = std::byte{0xec};
+    child_code[child_at++] = std::byte{0x08};
+    child_code[child_at++] = std::byte{0xff};
+    child_code[child_at++] = std::byte{0xd0};
+    child_code[child_at++] = std::byte{0x48};
+    child_code[child_at++] = std::byte{0x83};
+    child_code[child_at++] = std::byte{0xc4};
+    child_code[child_at++] = std::byte{0x08};
+    child_code[child_at++] = std::byte{0xc3};
+    NYXORA_CHECK(code->copy(0, std::span<const std::byte>(child_code.data(), child_at)));
 
     nyxora::GuestAddress handle = 0;
     nyxora::GuestAddress child_result = 0;
@@ -265,7 +280,52 @@ NYXORA_TEST(libkernel_pthread_create_and_join_work_through_guest_hle_calls) {
     const auto join_result = trampoline->invoke(
         reinterpret_cast<nyxora::GuestAddress>(code->host_pointer(join_offset)), stack->top());
     NYXORA_CHECK(join_result == 0);
-    NYXORA_CHECK(child_result == argument);
+    NYXORA_CHECK(child_result == handle);
     NYXORA_CHECK(manager.size() == 0);
+#endif
+}
+
+
+NYXORA_TEST(libkernel_pthread_self_and_detach_use_runtime_thread_identity) {
+#if defined(__x86_64__) || defined(_M_X64)
+    nyxora::runtime::SymbolRegistry symbols;
+    nyxora::runtime::HleRegistry hle(symbols);
+    nyxora::hle::libkernel::register_core(hle);
+    nyxora::runtime::TlsRegistry tls;
+    nyxora::runtime::GuestThreadManager manager(tls);
+
+    const auto self_binding = symbols.resolve(libkernel_key("EotR8a3ASf4"));
+    const auto detach_binding = symbols.resolve(libkernel_key("+U1R4WtXvoc"));
+    NYXORA_CHECK(self_binding.has_value());
+    NYXORA_CHECK(detach_binding.has_value());
+
+    auto stack = nyxora::runtime::GuestStack::create(64 * 1024);
+    auto trampoline = nyxora::runtime::EntryTrampoline::create();
+    NYXORA_CHECK(stack.has_value());
+    NYXORA_CHECK(trampoline.has_value());
+
+    nyxora::runtime::ScopedGuestThreadManager manager_scope(manager);
+    NYXORA_CHECK(trampoline->invoke(self_binding->address, stack->top()) == manager.root_handle());
+
+    const auto page = nyxora::memory::NativeArena::page_size();
+    auto code = nyxora::memory::NativeArena::reserve(page);
+    NYXORA_CHECK(code.has_value());
+    NYXORA_CHECK(code->protect(0, page,
+                               nyxora::memory::Protection::read |
+                                   nyxora::memory::Protection::write));
+    const std::array<std::byte, 1> child_code{std::byte{0xc3}};
+    NYXORA_CHECK(code->copy(0, child_code));
+    NYXORA_CHECK(code->flush_instruction_cache(0, child_code.size()));
+    NYXORA_CHECK(code->protect(0, page,
+                               nyxora::memory::Protection::read |
+                                   nyxora::memory::Protection::execute));
+
+    nyxora::GuestAddress handle = 0;
+    NYXORA_CHECK(manager.create(
+                     &handle, 0,
+                     reinterpret_cast<nyxora::GuestAddress>(code->host_pointer()), 0,
+                     64 * 1024) == 0);
+    NYXORA_CHECK(trampoline->invoke(detach_binding->address, stack->top(), handle) == 0);
+    NYXORA_CHECK(manager.join(handle, nullptr) == nyxora::runtime::GuestThreadManager::kPosixEinval);
 #endif
 }
