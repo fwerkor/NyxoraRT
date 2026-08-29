@@ -32,14 +32,14 @@ void emit_movdqu_rsp(std::vector<std::byte>& code, bool load, unsigned xmm, std:
 }
 #endif
 
-std::vector<std::byte> build_entry_trampoline() {
+std::vector<std::byte> build_entry_trampoline(std::size_t& recovery_offset) {
     std::vector<std::byte> code;
+    recovery_offset = 0;
 #if defined(__x86_64__) || defined(_M_X64)
 #if defined(_WIN32)
-    // Host ABI: Microsoft x64. Guest ABI: SysV x86-64.
-    // Save the fifth host argument before moving to the guest stack.
     const std::byte prefix[] = {
         std::byte{0x4c}, std::byte{0x8b}, std::byte{0x54}, std::byte{0x24}, std::byte{0x28}, // mov r10,[rsp+0x28]
+        std::byte{0x48}, std::byte{0x8b}, std::byte{0x44}, std::byte{0x24}, std::byte{0x30}, // mov rax,[rsp+0x30]
         std::byte{0x55},                                                                   // push rbp
         std::byte{0x53},                                                                   // push rbx
         std::byte{0x57},                                                                   // push rdi
@@ -55,6 +55,12 @@ std::vector<std::byte> build_entry_trampoline() {
     for (unsigned xmm = 6; xmm <= 15; ++xmm) {
         emit_movdqu_rsp(code, false, xmm, static_cast<std::uint32_t>((xmm - 6U) * 16U));
     }
+    const std::byte save_recovery[] = {
+        std::byte{0x48}, std::byte{0x85}, std::byte{0xc0},                               // test rax,rax
+        std::byte{0x74}, std::byte{0x03},                                                 // jz +3
+        std::byte{0x48}, std::byte{0x89}, std::byte{0x20},                               // mov [rax],rsp
+    };
+    code.insert(code.end(), std::begin(save_recovery), std::end(save_recovery));
     const std::byte switch_stack[] = {
         std::byte{0x49}, std::byte{0x89}, std::byte{0xe4},                               // mov r12,rsp
         std::byte{0x49}, std::byte{0x89}, std::byte{0xcb},                               // mov r11,rcx
@@ -74,32 +80,44 @@ std::vector<std::byte> build_entry_trampoline() {
         std::byte{0x4c}, std::byte{0x89}, std::byte{0xe4},                               // mov rsp,r12
     };
     code.insert(code.end(), std::begin(switch_stack), std::end(switch_stack));
-    for (unsigned xmm = 6; xmm <= 15; ++xmm) {
-        emit_movdqu_rsp(code, true, xmm, static_cast<std::uint32_t>((xmm - 6U) * 16U));
-    }
-    const std::byte suffix[] = {
-        std::byte{0x48}, std::byte{0x81}, std::byte{0xc4}, std::byte{0xa0}, std::byte{0x00},
-        std::byte{0x00}, std::byte{0x00},                                                 // add rsp,0xa0
-        std::byte{0x41}, std::byte{0x5f},                                                 // pop r15
-        std::byte{0x41}, std::byte{0x5e},                                                 // pop r14
-        std::byte{0x41}, std::byte{0x5d},                                                 // pop r13
-        std::byte{0x41}, std::byte{0x5c},                                                 // pop r12
-        std::byte{0x5e},                                                                   // pop rsi
-        std::byte{0x5f},                                                                   // pop rdi
-        std::byte{0x5b},                                                                   // pop rbx
-        std::byte{0x5d},                                                                   // pop rbp
-        std::byte{0xc3},                                                                   // ret
+
+    const auto append_windows_restore = [&](bool clear_return) {
+        for (unsigned xmm = 6; xmm <= 15; ++xmm) {
+            emit_movdqu_rsp(code, true, xmm, static_cast<std::uint32_t>((xmm - 6U) * 16U));
+        }
+        const std::byte restore[] = {
+            std::byte{0x48}, std::byte{0x81}, std::byte{0xc4}, std::byte{0xa0}, std::byte{0x00},
+            std::byte{0x00}, std::byte{0x00},                                                 // add rsp,0xa0
+            std::byte{0x41}, std::byte{0x5f},                                                 // pop r15
+            std::byte{0x41}, std::byte{0x5e},                                                 // pop r14
+            std::byte{0x41}, std::byte{0x5d},                                                 // pop r13
+            std::byte{0x41}, std::byte{0x5c},                                                 // pop r12
+            std::byte{0x5e},                                                                   // pop rsi
+            std::byte{0x5f},                                                                   // pop rdi
+            std::byte{0x5b},                                                                   // pop rbx
+            std::byte{0x5d},                                                                   // pop rbp
+        };
+        code.insert(code.end(), std::begin(restore), std::end(restore));
+        if (clear_return) {
+            code.push_back(std::byte{0x31});
+            code.push_back(std::byte{0xc0}); // xor eax,eax
+        }
+        code.push_back(std::byte{0xc3}); // ret
     };
-    code.insert(code.end(), std::begin(suffix), std::end(suffix));
+    append_windows_restore(false);
+    recovery_offset = code.size();
+    append_windows_restore(true);
 #else
-    // Host and guest both use the SysV x86-64 ABI.
-    const std::byte bytes[] = {
+    const std::byte prefix[] = {
         std::byte{0x55},                                                                   // push rbp
         std::byte{0x53},                                                                   // push rbx
         std::byte{0x41}, std::byte{0x54},                                                 // push r12
         std::byte{0x41}, std::byte{0x55},                                                 // push r13
         std::byte{0x41}, std::byte{0x56},                                                 // push r14
         std::byte{0x41}, std::byte{0x57},                                                 // push r15
+        std::byte{0x4d}, std::byte{0x85}, std::byte{0xc9},                               // test r9,r9
+        std::byte{0x74}, std::byte{0x03},                                                 // jz +3
+        std::byte{0x49}, std::byte{0x89}, std::byte{0x21},                               // mov [r9],rsp
         std::byte{0x49}, std::byte{0x89}, std::byte{0xfb},                               // mov r11,rdi
         std::byte{0x49}, std::byte{0x89}, std::byte{0xf6},                               // mov r14,rsi
         std::byte{0x48}, std::byte{0x89}, std::byte{0xd7},                               // mov rdi,rdx
@@ -124,12 +142,23 @@ std::vector<std::byte> build_entry_trampoline() {
         std::byte{0x5d},                                                                  // pop rbp
         std::byte{0xc3},                                                                  // ret
     };
-    code.assign(std::begin(bytes), std::end(bytes));
+    code.assign(std::begin(prefix), std::end(prefix));
+    recovery_offset = code.size();
+    const std::byte recovery[] = {
+        std::byte{0x41}, std::byte{0x5f}, // pop r15
+        std::byte{0x41}, std::byte{0x5e}, // pop r14
+        std::byte{0x41}, std::byte{0x5d}, // pop r13
+        std::byte{0x41}, std::byte{0x5c}, // pop r12
+        std::byte{0x5b},                   // pop rbx
+        std::byte{0x5d},                   // pop rbp
+        std::byte{0x31}, std::byte{0xc0}, // xor eax,eax
+        std::byte{0xc3},                   // ret
+    };
+    code.insert(code.end(), std::begin(recovery), std::end(recovery));
 #endif
 #endif
     return code;
 }
-
 } // namespace
 
 std::optional<GuestStack> GuestStack::create(GuestSize usable_size, std::size_t guard_pages) {
@@ -163,8 +192,9 @@ std::optional<EntryTrampoline> EntryTrampoline::create() {
     if (!supported()) {
         return std::nullopt;
     }
-    const auto code = build_entry_trampoline();
-    if (code.empty()) {
+    std::size_t recovery_offset = 0;
+    const auto code = build_entry_trampoline(recovery_offset);
+    if (code.empty() || recovery_offset >= code.size()) {
         return std::nullopt;
     }
     const auto page = memory::NativeArena::page_size();
@@ -175,19 +205,19 @@ std::optional<EntryTrampoline> EntryTrampoline::create() {
         !arena->protect(0, page, memory::Protection::read | memory::Protection::execute)) {
         return std::nullopt;
     }
-    return EntryTrampoline(std::move(*arena));
+    return EntryTrampoline(std::move(*arena), recovery_offset);
 }
 
 std::uint64_t EntryTrampoline::invoke(GuestAddress entry, GuestAddress stack_top,
                                       std::uint64_t arg0, std::uint64_t arg1,
-                                      std::uint64_t arg2) const {
+                                      std::uint64_t arg2, EntryRecoveryState* recovery) const {
     if (!code_ || entry == 0 || stack_top == 0) {
         throw std::runtime_error("entry trampoline is not initialized");
     }
     using HostThunk = std::uint64_t (*)(GuestAddress, GuestAddress, std::uint64_t, std::uint64_t,
-                                        std::uint64_t);
+                                        std::uint64_t, EntryRecoveryState*);
     const auto function = reinterpret_cast<HostThunk>(const_cast<void*>(code_.host_pointer()));
-    return function(entry, stack_top, arg0, arg1, arg2);
+    return function(entry, stack_top, arg0, arg1, arg2, recovery);
 }
 
 } // namespace nyxora::runtime

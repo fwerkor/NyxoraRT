@@ -34,6 +34,18 @@ bool is_loadable_segment(std::uint32_t type) {
     return type == loader::kProgramLoad || type == loader::kProgramSceRelro;
 }
 
+void validate_native_entry(const memory::GuestAddressSpace& memory,
+                           const LoadedModule& module) {
+    if (!memory.native_backed()) {
+        throw std::runtime_error("native entry invocation requires a native-backed guest address space");
+    }
+    const auto* entry_region = memory.find(module.entry);
+    if (entry_region == nullptr ||
+        !memory::has(entry_region->protection, memory::Protection::execute)) {
+        throw std::runtime_error("module entry is not mapped executable guest memory");
+    }
+}
+
 } // namespace
 
 Runtime::Runtime(std::unique_ptr<gpu::Backend> gpu_backend)
@@ -148,14 +160,7 @@ RelocationReport Runtime::relink(LoadedModule& module) {
 std::uint64_t Runtime::invoke_entry(const LoadedModule& module, GuestSize stack_size,
                                     std::uint64_t arg0, std::uint64_t arg1,
                                     std::uint64_t arg2) {
-    if (!memory_.native_backed()) {
-        throw std::runtime_error("native entry invocation requires a native-backed guest address space");
-    }
-    const auto* entry_region = memory_.find(module.entry);
-    if (entry_region == nullptr ||
-        !memory::has(entry_region->protection, memory::Protection::execute)) {
-        throw std::runtime_error("module entry is not mapped executable guest memory");
-    }
+    validate_native_entry(memory_, module);
 
     auto stack = GuestStack::create(stack_size);
     auto trampoline = EntryTrampoline::create();
@@ -165,7 +170,24 @@ std::uint64_t Runtime::invoke_entry(const LoadedModule& module, GuestSize stack_
     }
 
     ScopedGuestThreadContext context_scope(*thread);
-    return trampoline->invoke(module.entry, stack->top(), arg0, arg1, arg2);
+    ScopedGuestSegment segment_scope(*thread);
+    const auto result = invoke_guest_captured(*trampoline, module.entry, stack->top(),
+                                              arg0, arg1, arg2);
+    if (result.fault) {
+        throw GuestFaultException(*result.fault);
+    }
+    return result.value;
+}
+
+GuestThread Runtime::start_thread(const LoadedModule& module, GuestSize stack_size,
+                                  std::uint64_t arg0, std::uint64_t arg1,
+                                  std::uint64_t arg2) {
+    validate_native_entry(memory_, module);
+    auto thread = GuestThread::start(tls_registry_, module.entry, stack_size, arg0, arg1, arg2);
+    if (!thread) {
+        throw std::runtime_error("unable to initialize guest thread execution state");
+    }
+    return std::move(*thread);
 }
 
 } // namespace nyxora::runtime

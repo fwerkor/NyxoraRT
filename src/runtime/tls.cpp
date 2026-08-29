@@ -2,7 +2,15 @@
 
 #include <algorithm>
 #include <cstring>
+#include <exception>
 #include <limits>
+#include <stdexcept>
+
+#if defined(__linux__) && defined(__x86_64__)
+#include <asm/prctl.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+#endif
 
 namespace nyxora::runtime {
 namespace {
@@ -21,6 +29,21 @@ std::optional<std::size_t> aligned_offset(const void* storage, std::size_t align
     const auto aligned = (base + alignment - 1U) & ~(static_cast<std::uintptr_t>(alignment) - 1U);
     return static_cast<std::size_t>(aligned - base);
 }
+
+#if defined(__linux__) && defined(__x86_64__)
+bool get_gs_base(std::uintptr_t& base) noexcept {
+    unsigned long value = 0;
+    if (::syscall(SYS_arch_prctl, ARCH_GET_GS, &value) != 0) {
+        return false;
+    }
+    base = static_cast<std::uintptr_t>(value);
+    return true;
+}
+
+bool set_gs_base(std::uintptr_t base) noexcept {
+    return ::syscall(SYS_arch_prctl, ARCH_SET_GS, static_cast<unsigned long>(base)) == 0;
+}
+#endif
 
 } // namespace
 
@@ -43,6 +66,8 @@ bool TlsRegistry::register_module(std::uint32_t module_id, std::size_t alignment
     module.memory_size = memory_size;
     module.initial_image.assign(initial_image.begin(), initial_image.end());
     modules_.push_back(std::move(module));
+    max_module_id_ = std::max(max_module_id_, static_cast<std::size_t>(module_id));
+    ++generation_;
     return true;
 }
 
@@ -51,6 +76,21 @@ const TlsModuleImage* TlsRegistry::find(std::uint32_t module_id) const noexcept 
         return module.module_id == module_id;
     });
     return it == modules_.end() ? nullptr : &*it;
+}
+
+GuestThreadContext::GuestThreadContext(GuestThreadContext&& other) noexcept
+    : blocks_(std::move(other.blocks_)), dtv_(std::move(other.dtv_)), tcb_(other.tcb_) {
+    rebind_tcb();
+}
+
+GuestThreadContext& GuestThreadContext::operator=(GuestThreadContext&& other) noexcept {
+    if (this != &other) {
+        blocks_ = std::move(other.blocks_);
+        dtv_ = std::move(other.dtv_);
+        tcb_ = other.tcb_;
+        rebind_tcb();
+    }
+    return *this;
 }
 
 std::optional<GuestThreadContext> GuestThreadContext::create(const TlsRegistry& registry) {
@@ -67,6 +107,7 @@ bool GuestThreadContext::synchronize(const TlsRegistry& registry) {
             return false;
         }
     }
+    rebuild_dtv(registry);
     return true;
 }
 
@@ -91,6 +132,25 @@ bool GuestThreadContext::add_module(const TlsModuleImage& module) {
     }
     blocks_.push_back(std::move(block));
     return true;
+}
+
+void GuestThreadContext::rebuild_dtv(const TlsRegistry& registry) {
+    dtv_.assign(registry.max_module_id() + 2U, GuestDtvEntry{});
+    dtv_[0].counter = registry.generation();
+    dtv_[1].counter = registry.max_module_id();
+    for (auto& block : blocks_) {
+        if (block.module_id < dtv_.size() - 1U) {
+            dtv_[block.module_id + 1U].pointer = block.storage.data() + block.aligned_offset;
+        }
+    }
+
+    rebind_tcb();
+}
+
+void GuestThreadContext::rebind_tcb() noexcept {
+    tcb_.self = &tcb_;
+    tcb_.dtv = dtv_.empty() ? nullptr : dtv_.data();
+    tcb_.canary = 0x9e3779b97f4a7c15ULL ^ reinterpret_cast<std::uintptr_t>(&tcb_);
 }
 
 GuestThreadContext::Block* GuestThreadContext::find_block(std::uint32_t module_id) noexcept {
@@ -134,6 +194,46 @@ ScopedGuestThreadContext::~ScopedGuestThreadContext() {
 
 GuestThreadContext* ScopedGuestThreadContext::current() noexcept {
     return current_context;
+}
+
+bool ScopedGuestSegment::supported() noexcept {
+#if defined(__linux__) && defined(__x86_64__)
+    return true;
+#else
+    return false;
+#endif
+}
+
+std::optional<std::uintptr_t> ScopedGuestSegment::current_base() noexcept {
+#if defined(__linux__) && defined(__x86_64__)
+    std::uintptr_t base = 0;
+    if (!get_gs_base(base)) {
+        return std::nullopt;
+    }
+    return base;
+#else
+    return std::nullopt;
+#endif
+}
+
+ScopedGuestSegment::ScopedGuestSegment(GuestThreadContext& context) {
+#if defined(__linux__) && defined(__x86_64__)
+    if (!get_gs_base(previous_base_) ||
+        !set_gs_base(reinterpret_cast<std::uintptr_t>(context.tcb()))) {
+        throw std::runtime_error("unable to bind guest TCB to GS base");
+    }
+    active_ = true;
+#else
+    (void)context;
+#endif
+}
+
+ScopedGuestSegment::~ScopedGuestSegment() {
+#if defined(__linux__) && defined(__x86_64__)
+    if (active_ && !set_gs_base(previous_base_)) {
+        std::terminate();
+    }
+#endif
 }
 
 } // namespace nyxora::runtime

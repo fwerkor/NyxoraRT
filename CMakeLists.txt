@@ -4,6 +4,8 @@ project(NyxoraRT VERSION 0.1.0 LANGUAGES CXX)
 option(NYXORA_BUILD_TESTS "Build NyxoraRT tests" ON)
 option(NYXORA_ENABLE_WERROR "Treat warnings as errors" OFF)
 
+find_package(Threads REQUIRED)
+
 add_library(nyxora_core
     src/loader/elf64.cpp
     src/loader/dynamic.cpp
@@ -11,6 +13,8 @@ add_library(nyxora_core
     src/runtime/linker.cpp
     src/runtime/late_imports.cpp
     src/runtime/hle_registry.cpp
+    src/runtime/fault.cpp
+    src/runtime/guest_thread.cpp
     src/runtime/native_thread.cpp
     src/runtime/tls.cpp
     src/memory/guest_address_space.cpp
@@ -24,6 +28,7 @@ add_library(NyxoraRT::core ALIAS nyxora_core)
 
 target_include_directories(nyxora_core PUBLIC include)
 target_compile_features(nyxora_core PUBLIC cxx_std_20)
+target_link_libraries(nyxora_core PUBLIC Threads::Threads)
 
 if(MSVC)
     target_compile_options(nyxora_core PRIVATE /W4 /permissive-)
@@ -50,6 +55,8 @@ if(NYXORA_BUILD_TESTS)
         tests/linker_tests.cpp
         tests/late_import_tests.cpp
         tests/hle_tests.cpp
+        tests/fault_tests.cpp
+        tests/guest_thread_tests.cpp
         tests/runtime_tests.cpp
         tests/guest_address_space_tests.cpp
         tests/native_arena_tests.cpp

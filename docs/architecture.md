@@ -44,13 +44,17 @@ Unresolved callable imports can now be patched to a stable late-binding thunk. E
 
 The native-memory path can load and relocate a synthetic SCE image, build a guarded guest stack, switch `RSP`/`RBP`, present the guest SysV argument convention, and return safely to the host. `Runtime::invoke_entry()` composes this with a per-thread runtime context. On Windows x64 the generated entry bridge preserves Microsoft-ABI nonvolatile GPR/XMM state while entering SysV guest code.
 
-PT_TLS templates are registered per loaded module. Each guest thread receives its own aligned copy of initialized TLS bytes plus zeroed TLS BSS. The current thread context is explicit and nestable; it deliberately does not replace the host FS/GS base yet. Real binaries that directly issue segment-relative TLS accesses therefore still need the segment/TLS binding layer.
+PT_TLS templates are registered per loaded module. Each guest thread receives its own aligned copy of initialized TLS bytes plus zeroed TLS BSS and a 0x40-byte TCB whose DTV uses the guest module identifiers assigned by the linker. Moving a thread context explicitly rebinds the TCB self/DTV pointers so the ABI structure cannot retain stale host addresses.
+
+On Linux x86-64, a scoped segment binding places the guest TCB at GS while leaving the host FS base untouched. This is intentionally only half of the native TLS path: target binaries use FS for TCB access, so known FS-based TCB instructions must be decoded and rewritten to GS before unmodified binaries can use the binding. NyxoraRT does not perform blind byte replacement because an 0x64 byte inside an immediate or displacement is not an FS prefix. Windows and macOS require separate code-side/LDT strategies rather than changing the host TLS register generically.
+
+POSIX native execution installs process-level SIGSEGV/SIGBUS/SIGILL handlers once, but capture is thread-local and active only around guest invocation. A guest fault records its native signal, fault address, and instruction pointer; faults outside an active guest invocation are chained to the previously installed host handler. `GuestThread` composes an independent guest stack, TLS/TCB context, segment scope, entry trampoline, and captured result on a real host thread.
 
 The next native-execution work is:
 
-- safe guest segment/TLS binding without corrupting host runtime TLS;
-- signal/exception routing for guest faults;
-- persistent guest-thread ownership and creation/join;
+- decode and rewrite guest FS-TCB accesses to the platform-specific TCB mechanism;
+- Windows VEH-backed guest fault capture;
+- map libkernel pthread creation/join onto `GuestThread` and add runtime thread tracking;
 - Windows host-call stack switching for HLE functions that may probe or consume substantial stack;
 - a narrow fallback mechanism for instructions or behaviors that cannot execute directly.
 

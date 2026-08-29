@@ -32,6 +32,10 @@ private:
     GuestSize size_{};
 };
 
+struct EntryRecoveryState {
+    GuestAddress host_stack{};
+};
+
 class EntryTrampoline {
 public:
     EntryTrampoline() = default;
@@ -41,12 +45,18 @@ public:
 
     [[nodiscard]] std::uint64_t invoke(GuestAddress entry, GuestAddress stack_top,
                                        std::uint64_t arg0 = 0, std::uint64_t arg1 = 0,
-                                       std::uint64_t arg2 = 0) const;
+                                       std::uint64_t arg2 = 0,
+                                       EntryRecoveryState* recovery = nullptr) const;
+    [[nodiscard]] GuestAddress recovery_address() const noexcept {
+        return code_ ? code_.base() + recovery_offset_ : 0;
+    }
 
 private:
-    explicit EntryTrampoline(memory::NativeArena code) : code_(std::move(code)) {}
+    EntryTrampoline(memory::NativeArena code, std::size_t recovery_offset)
+        : code_(std::move(code)), recovery_offset_(recovery_offset) {}
 
     memory::NativeArena code_;
+    std::size_t recovery_offset_{};
 };
 
 } // namespace nyxora::runtime

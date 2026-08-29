@@ -13,6 +13,8 @@
 #include "nyxora/loader/elf64.hpp"
 #include "nyxora/memory/guest_address_space.hpp"
 #include "nyxora/runtime/linker.hpp"
+#include "nyxora/runtime/fault.hpp"
+#include "nyxora/runtime/guest_thread.hpp"
 #include "nyxora/runtime/late_imports.hpp"
 #include "nyxora/runtime/native_thread.hpp"
 #include "nyxora/runtime/hle_registry.hpp"
@@ -46,6 +48,11 @@ public:
                                              std::uint64_t arg0 = 0,
                                              std::uint64_t arg1 = 0,
                                              std::uint64_t arg2 = 0);
+    [[nodiscard]] GuestThread start_thread(const LoadedModule& module,
+                                           GuestSize stack_size = 1024 * 1024,
+                                           std::uint64_t arg0 = 0,
+                                           std::uint64_t arg1 = 0,
+                                           std::uint64_t arg2 = 0);
 
     [[nodiscard]] memory::GuestAddressSpace& memory() noexcept { return memory_; }
     [[nodiscard]] const memory::GuestAddressSpace& memory() const noexcept { return memory_; }
