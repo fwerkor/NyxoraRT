@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <span>
 #include <stdexcept>
 #include <utility>
 
@@ -47,6 +48,113 @@ void validate_native_entry(const memory::GuestAddressSpace& memory,
     }
 }
 
+struct PendingSegment {
+    GuestAddress base{};
+    GuestSize size{};
+    GuestSize file_size{};
+    memory::Protection final_protection{memory::Protection::none};
+};
+
+bool overlaps(GuestAddress base, GuestSize size, const memory::RegionInfo& region) {
+    if (size == 0 || region.size == 0 ||
+        base > std::numeric_limits<GuestAddress>::max() - size ||
+        region.base > std::numeric_limits<GuestAddress>::max() - region.size) {
+        return false;
+    }
+    return base < region.base + region.size && region.base < base + size;
+}
+
+std::optional<TcbPatchArena> try_map_cpu_patch_page(memory::GuestAddressSpace& memory,
+                                                     std::span<const PendingSegment> segments,
+                                                     std::string name) {
+    if (segments.empty()) {
+        return std::nullopt;
+    }
+    const auto page = static_cast<GuestSize>(memory::NativeArena::page_size());
+    if (std::none_of(segments.begin(), segments.end(), [](const auto& segment) {
+            return memory::has(segment.final_protection, memory::Protection::execute);
+        })) {
+        return std::nullopt;
+    }
+    GuestAddress module_begin = std::numeric_limits<GuestAddress>::max();
+    GuestAddress module_end = 0;
+    for (const auto& segment : segments) {
+        module_begin = std::min(module_begin, segment.base);
+        if (segment.base > std::numeric_limits<GuestAddress>::max() - segment.size) {
+            return std::nullopt;
+        }
+        module_end = std::max(module_end, segment.base + segment.size);
+    }
+
+    auto candidate = checked_align_up(module_end, page);
+    if (!candidate) {
+        return std::nullopt;
+    }
+    const auto regions = memory.regions();
+    while (true) {
+        if (memory.native_backed()) {
+            const auto native_begin = memory.native_base();
+            if (native_begin > std::numeric_limits<GuestAddress>::max() - memory.native_size()) {
+                break;
+            }
+            const auto native_end = native_begin + memory.native_size();
+            if (*candidate < native_begin || *candidate > native_end || page > native_end - *candidate) {
+                break;
+            }
+        }
+        const auto blocking = std::find_if(regions.begin(), regions.end(), [&](const auto& region) {
+            return overlaps(*candidate, page, region);
+        });
+        if (blocking == regions.end()) {
+            const auto forward = *candidate >= module_begin ? *candidate - module_begin
+                                                             : module_begin - *candidate;
+            if (forward <= static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max()) &&
+                memory.map(*candidate, page,
+                           memory::Protection::read | memory::Protection::write, name)) {
+                return TcbPatchArena{.base = *candidate, .size = page, .used = 0};
+            }
+            break;
+        }
+        if (blocking->base > std::numeric_limits<GuestAddress>::max() - blocking->size) {
+            break;
+        }
+        candidate = checked_align_up(blocking->base + blocking->size, page);
+        if (!candidate) {
+            break;
+        }
+    }
+
+    if (module_begin < page) {
+        return std::nullopt;
+    }
+    GuestAddress downward = module_begin / page * page - page;
+    while (true) {
+        if (memory.native_backed()) {
+            const auto native_begin = memory.native_base();
+            if (downward < native_begin) {
+                break;
+            }
+        }
+        const auto blocking = std::find_if(regions.begin(), regions.end(), [&](const auto& region) {
+            return overlaps(downward, page, region);
+        });
+        if (blocking == regions.end()) {
+            const auto distance = module_end >= downward ? module_end - downward : downward - module_end;
+            if (distance <= static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max()) &&
+                memory.map(downward, page,
+                           memory::Protection::read | memory::Protection::write, name)) {
+                return TcbPatchArena{.base = downward, .size = page, .used = 0};
+            }
+            break;
+        }
+        if (blocking->base < page) {
+            break;
+        }
+        downward = blocking->base / page * page - page;
+    }
+    return std::nullopt;
+}
+
 } // namespace
 
 Runtime::Runtime(std::unique_ptr<gpu::Backend> gpu_backend)
@@ -80,6 +188,7 @@ LoadedModule Runtime::load_image(const loader::Elf64Image& image, std::filesyste
         .relocations = {},
     };
 
+    std::vector<PendingSegment> pending_segments;
     for (const auto& segment : image.program_headers()) {
         if (!is_loadable_segment(segment.type) || segment.memory_size == 0) {
             continue;
@@ -106,9 +215,26 @@ LoadedModule Runtime::load_image(const loader::Elf64Image& image, std::filesyste
                           segment.memory_size - segment.file_size)) {
             throw std::runtime_error("unable to initialize ELF BSS range");
         }
-        if (memory::has(final_protection, memory::Protection::execute) && segment.file_size != 0) {
-            const auto patches = patch_tcb_accesses(memory_, guest_base, segment.file_size,
-                                                    host_tcb_patch_policy());
+        pending_segments.push_back(PendingSegment{
+            .base = guest_base,
+            .size = segment.memory_size,
+            .file_size = segment.file_size,
+            .final_protection = final_protection,
+        });
+    }
+
+    const auto policy = host_tcb_patch_policy();
+    std::optional<TcbPatchArena> patch_arena;
+    if (policy.mode == TcbPatchMode::fs_to_windows_teb) {
+        patch_arena = try_map_cpu_patch_page(memory_, pending_segments,
+                                             module.path.filename().string() + ".cpu-patches");
+    }
+
+    for (const auto& segment : pending_segments) {
+        if (memory::has(segment.final_protection, memory::Protection::execute) &&
+            segment.file_size != 0) {
+            const auto patches = patch_tcb_accesses(memory_, segment.base, segment.file_size, policy,
+                                                    patch_arena ? &*patch_arena : nullptr);
             if (!patches) {
                 throw std::runtime_error("unable to inspect executable segment for CPU patches");
             }
@@ -116,10 +242,25 @@ LoadedModule Runtime::load_image(const loader::Elf64Image& image, std::filesyste
                 throw std::runtime_error("executable segment contains unsupported guest TCB accesses");
             }
         }
-        if (!memory_.protect(guest_base, segment.memory_size, final_protection)) {
+    }
+
+    if (patch_arena) {
+        if (patch_arena->used == 0) {
+            if (!memory_.unmap(patch_arena->base, patch_arena->size)) {
+                throw std::runtime_error("unable to release unused CPU patch arena");
+            }
+            patch_arena.reset();
+        } else if (!memory_.protect(patch_arena->base, patch_arena->size,
+                                    memory::Protection::read | memory::Protection::execute)) {
+            throw std::runtime_error("unable to protect CPU patch arena");
+        }
+    }
+
+    for (const auto& segment : pending_segments) {
+        if (!memory_.protect(segment.base, segment.size, segment.final_protection)) {
             throw std::runtime_error("unable to apply ELF segment protection");
         }
-        module.segments.push_back(*memory_.find(guest_base));
+        module.segments.push_back(*memory_.find(segment.base));
     }
 
     if (module.tls) {

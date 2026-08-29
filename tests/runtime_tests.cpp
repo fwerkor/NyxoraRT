@@ -193,3 +193,126 @@ NYXORA_TEST(runtime_rewrites_fs_tcb_access_and_executes_it_on_supported_x64_host
     NYXORA_CHECK(result != 0);
 #endif
 }
+
+
+NYXORA_TEST(runtime_executes_nonzero_fs_tcb_mov_on_supported_x64_hosts) {
+#if (defined(__linux__) && defined(__x86_64__)) || (defined(_WIN32) && defined(_M_X64))
+    auto bytes = test_fixture::sce_dynamic_elf();
+    const std::array<std::byte, 10> entry_code{
+        std::byte{0x64}, std::byte{0x48}, std::byte{0x8b}, std::byte{0x04}, std::byte{0x25},
+        std::byte{0x10}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0xc3},
+    };
+    std::memcpy(bytes.data() + test_fixture::SceImageLayout::load_offset + 0x40,
+                entry_code.data(), entry_code.size());
+
+    const auto page = nyxora::memory::NativeArena::page_size();
+    auto memory = nyxora::memory::GuestAddressSpace::reserve_native(page * 3U);
+    NYXORA_CHECK(memory.has_value());
+    const auto base = memory->native_base();
+    nyxora::runtime::Runtime runtime(std::make_unique<nyxora::gpu::NullBackend>(),
+                                     std::move(*memory));
+    const auto image = nyxora::loader::Elf64Image::from_bytes(std::move(bytes));
+    const auto module = runtime.load_image(image, "fs-tcb-thread.elf", base);
+
+    const auto patched = runtime.memory().view(module.entry, entry_code.size());
+    NYXORA_CHECK(patched.size() == entry_code.size());
+#if defined(_WIN32)
+    NYXORA_CHECK(patched[0] == std::byte{0xe9});
+#else
+    NYXORA_CHECK(patched[0] == std::byte{0x65});
+#endif
+    NYXORA_CHECK(runtime.invoke_entry(module, 64 * 1024) == 0);
+#endif
+}
+
+NYXORA_TEST(runtime_preserves_cmp_flags_through_nonzero_tcb_thunk) {
+#if (defined(__linux__) && defined(__x86_64__)) || (defined(_WIN32) && defined(_M_X64))
+    auto bytes = test_fixture::sce_dynamic_elf();
+    const std::array<std::byte, 25> entry_code{
+        // mov rax, fs:[8]
+        std::byte{0x64}, std::byte{0x48}, std::byte{0x8b}, std::byte{0x04}, std::byte{0x25},
+        std::byte{0x08}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
+        // cmp rax, fs:[8]
+        std::byte{0x64}, std::byte{0x48}, std::byte{0x3b}, std::byte{0x04}, std::byte{0x25},
+        std::byte{0x08}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
+        // sete al; movzx eax,al; ret
+        std::byte{0x0f}, std::byte{0x94}, std::byte{0xc0},
+        std::byte{0x0f}, std::byte{0xb6}, std::byte{0xc0}, std::byte{0xc3},
+    };
+    std::memcpy(bytes.data() + test_fixture::SceImageLayout::load_offset + 0x40,
+                entry_code.data(), entry_code.size());
+
+    const auto page = nyxora::memory::NativeArena::page_size();
+    auto memory = nyxora::memory::GuestAddressSpace::reserve_native(page * 3U);
+    NYXORA_CHECK(memory.has_value());
+    const auto base = memory->native_base();
+    nyxora::runtime::Runtime runtime(std::make_unique<nyxora::gpu::NullBackend>(),
+                                     std::move(*memory));
+    const auto image = nyxora::loader::Elf64Image::from_bytes(std::move(bytes));
+    const auto module = runtime.load_image(image, "fs-tcb-cmp.elf", base);
+    NYXORA_CHECK(runtime.invoke_entry(module, 64 * 1024) == 1);
+#endif
+}
+
+NYXORA_TEST(runtime_preserves_xor_flags_through_nonzero_tcb_thunk) {
+#if (defined(__linux__) && defined(__x86_64__)) || (defined(_WIN32) && defined(_M_X64))
+    auto bytes = test_fixture::sce_dynamic_elf();
+    const std::array<std::byte, 25> entry_code{
+        // mov rax, fs:[8]
+        std::byte{0x64}, std::byte{0x48}, std::byte{0x8b}, std::byte{0x04}, std::byte{0x25},
+        std::byte{0x08}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
+        // xor rax, fs:[8]
+        std::byte{0x64}, std::byte{0x48}, std::byte{0x33}, std::byte{0x04}, std::byte{0x25},
+        std::byte{0x08}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
+        // sete al; movzx eax,al; ret
+        std::byte{0x0f}, std::byte{0x94}, std::byte{0xc0},
+        std::byte{0x0f}, std::byte{0xb6}, std::byte{0xc0}, std::byte{0xc3},
+    };
+    std::memcpy(bytes.data() + test_fixture::SceImageLayout::load_offset + 0x40,
+                entry_code.data(), entry_code.size());
+
+    const auto page = nyxora::memory::NativeArena::page_size();
+    auto memory = nyxora::memory::GuestAddressSpace::reserve_native(page * 3U);
+    NYXORA_CHECK(memory.has_value());
+    const auto base = memory->native_base();
+    nyxora::runtime::Runtime runtime(std::make_unique<nyxora::gpu::NullBackend>(),
+                                     std::move(*memory));
+    const auto image = nyxora::loader::Elf64Image::from_bytes(std::move(bytes));
+    const auto module = runtime.load_image(image, "fs-tcb-xor.elf", base);
+    NYXORA_CHECK(runtime.invoke_entry(module, 64 * 1024) == 1);
+#endif
+}
+
+
+NYXORA_TEST(runtime_fault_capture_remains_active_after_nonzero_tcb_patch) {
+#if (defined(__linux__) && defined(__x86_64__)) || (defined(_WIN32) && defined(_M_X64))
+    auto bytes = test_fixture::sce_dynamic_elf();
+    const std::array<std::byte, 15> entry_code{
+        // mov rax, fs:[8]
+        std::byte{0x64}, std::byte{0x48}, std::byte{0x8b}, std::byte{0x04}, std::byte{0x25},
+        std::byte{0x08}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
+        // xor eax,eax; mov rax,[rax]; ret
+        std::byte{0x31}, std::byte{0xc0},
+        std::byte{0x48}, std::byte{0x8b}, std::byte{0x00}, std::byte{0xc3},
+    };
+    std::memcpy(bytes.data() + test_fixture::SceImageLayout::load_offset + 0x40,
+                entry_code.data(), entry_code.size());
+
+    const auto page = nyxora::memory::NativeArena::page_size();
+    auto memory = nyxora::memory::GuestAddressSpace::reserve_native(page * 3U);
+    NYXORA_CHECK(memory.has_value());
+    const auto base = memory->native_base();
+    nyxora::runtime::Runtime runtime(std::make_unique<nyxora::gpu::NullBackend>(),
+                                     std::move(*memory));
+    const auto image = nyxora::loader::Elf64Image::from_bytes(std::move(bytes));
+    const auto module = runtime.load_image(image, "fs-tcb-fault.elf", base);
+
+    try {
+        (void)runtime.invoke_entry(module, 64 * 1024);
+        NYXORA_CHECK(false);
+    } catch (const nyxora::runtime::GuestFaultException& fault) {
+        NYXORA_CHECK(fault.fault().kind == nyxora::runtime::GuestFaultKind::access_violation);
+        NYXORA_CHECK(fault.fault().instruction_pointer == module.entry + 11);
+    }
+#endif
+}

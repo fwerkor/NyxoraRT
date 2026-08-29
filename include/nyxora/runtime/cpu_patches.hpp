@@ -20,16 +20,23 @@ struct TcbPatchPolicy {
     std::uint32_t windows_teb_offset{};
 };
 
+struct TcbPatchArena {
+    GuestAddress base{};
+    GuestSize size{};
+    GuestSize used{};
+};
+
 struct TcbPatchReport {
     std::size_t decoded_instructions{};
     std::size_t decode_failures{};
     std::size_t rewritten{};
     std::size_t unsupported{};
+    GuestSize trampoline_bytes{};
 };
 
 [[nodiscard]] TcbPatchPolicy host_tcb_patch_policy() noexcept;
 [[nodiscard]] std::optional<TcbPatchReport>
 patch_tcb_accesses(memory::GuestAddressSpace& memory, GuestAddress base, GuestSize size,
-                   TcbPatchPolicy policy);
+                   TcbPatchPolicy policy, TcbPatchArena* arena = nullptr);
 
 } // namespace nyxora::runtime
