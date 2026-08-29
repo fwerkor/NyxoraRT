@@ -4,18 +4,22 @@
 #include <sstream>
 #include <string>
 
-#if !defined(_WIN32)
+#if !defined(_WIN32) && defined(__x86_64__)
 #include <array>
 #include <csignal>
 #include <exception>
 #include <mutex>
+#if defined(__APPLE__)
+#include <sys/ucontext.h>
+#else
 #include <ucontext.h>
+#endif
 #endif
 
 namespace nyxora::runtime {
 namespace {
 
-#if !defined(_WIN32)
+#if !defined(_WIN32) && defined(__x86_64__)
 struct SignalState {
     int signal_number{};
     struct sigaction previous {};
@@ -99,7 +103,7 @@ GuestFaultKind fault_kind(int signal_number) noexcept {
 [[noreturn]] void restore_default_and_reraise(int signal_number) noexcept {
     struct sigaction action {};
     action.sa_handler = SIG_DFL;
-    ::sigemptyset(&action.sa_mask);
+    sigemptyset(&action.sa_mask);
     (void)::sigaction(signal_number, &action, nullptr);
     (void)::raise(signal_number);
     _Exit(128 + signal_number);
@@ -158,7 +162,7 @@ void install_handlers() {
         struct sigaction action {};
         action.sa_sigaction = guest_signal_handler;
         action.sa_flags = SA_SIGINFO;
-        ::sigemptyset(&action.sa_mask);
+        sigemptyset(&action.sa_mask);
         if (::sigaction(state.signal_number, &action, &state.previous) == 0) {
             continue;
         }

@@ -113,7 +113,9 @@ public:
     [[nodiscard]] bool active() const noexcept { return active_; }
 
 private:
+#if defined(__linux__) && defined(__x86_64__)
     std::uintptr_t previous_base_{};
+#endif
     bool active_{};
 };
 
