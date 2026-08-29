@@ -125,8 +125,16 @@ NYXORA_TEST(hle_four_register_bridge_is_guest_callable) {
     emit_mov_imm64(guest_code, at, std::byte{0xba}, 3); // rdx
     emit_mov_imm64(guest_code, at, std::byte{0xb9}, 4); // rcx
     emit_mov_imm64(guest_code, at, std::byte{0xb8}, binding->address); // rax
+    guest_code[at++] = std::byte{0x48};
+    guest_code[at++] = std::byte{0x83};
+    guest_code[at++] = std::byte{0xec};
+    guest_code[at++] = std::byte{0x08}; // sub rsp,8 for a nested SysV call
     guest_code[at++] = std::byte{0xff};
     guest_code[at++] = std::byte{0xd0}; // call rax
+    guest_code[at++] = std::byte{0x48};
+    guest_code[at++] = std::byte{0x83};
+    guest_code[at++] = std::byte{0xc4};
+    guest_code[at++] = std::byte{0x08}; // add rsp,8
     guest_code[at++] = std::byte{0xc3}; // ret
     NYXORA_CHECK(code->copy(0, std::span<const std::byte>(guest_code.data(), at)));
     NYXORA_CHECK(code->flush_instruction_cache(0, at));

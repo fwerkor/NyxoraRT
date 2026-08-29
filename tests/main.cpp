@@ -11,10 +11,10 @@ int main() {
     for (const auto& test : test_registry()) {
         try {
             test.fn();
-            std::cout << "[PASS] " << test.name << '\n';
+            std::cout << "[PASS] " << test.name << std::endl;
         } catch (const std::exception& error) {
             ++failures;
-            std::cerr << "[FAIL] " << test.name << ": " << error.what() << '\n';
+            std::cerr << "[FAIL] " << test.name << ": " << error.what() << std::endl;
         }
     }
     return failures == 0 ? 0 : 1;
