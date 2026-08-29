@@ -11,6 +11,20 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 const auto process_start = Clock::now();
+thread_local std::int32_t guest_posix_errno = 0;
+
+std::uint64_t posix_error_address() {
+    return reinterpret_cast<std::uint64_t>(&guest_posix_errno);
+}
+
+std::uint64_t posix_failure(int error) {
+    guest_posix_errno = static_cast<std::int32_t>(error);
+    return static_cast<std::uint64_t>(static_cast<std::int64_t>(-1));
+}
+
+std::uint64_t posix_result(int error) {
+    return error == 0 ? 0 : posix_failure(error);
+}
 
 std::uint64_t process_time_us() {
     const auto elapsed = Clock::now() - process_start;
@@ -45,7 +59,7 @@ std::uint64_t kernel_error_result(std::uint32_t value) {
     return signed_result(static_cast<std::int64_t>(static_cast<std::int32_t>(value)));
 }
 
-std::uint64_t orbis_pthread_result(int result) {
+std::uint64_t orbis_errno_result(int result) {
     if (result == 0) {
         return 0;
     }
@@ -113,7 +127,7 @@ std::uint64_t sce_mutex_init(std::uint64_t mutex, std::uint64_t attributes,
                             : services->mutex_init(static_cast<GuestAddress>(mutex),
                                                    static_cast<GuestAddress>(attributes),
                                                    static_cast<GuestAddress>(name));
-    return orbis_pthread_result(result);
+    return orbis_errno_result(result);
 }
 
 std::uint64_t posix_mutex_lock(std::uint64_t mutex) {
@@ -139,23 +153,93 @@ std::uint64_t posix_mutex_destroy(std::uint64_t mutex) {
 
 std::uint64_t orbis_mutex_lock(std::uint64_t mutex) {
     auto* services = kernel_services();
-    return orbis_pthread_result(services == nullptr
+    return orbis_errno_result(services == nullptr
                                     ? runtime::KernelServices::kPosixEinval
                                     : services->mutex_lock(static_cast<GuestAddress>(mutex)));
 }
 
 std::uint64_t orbis_mutex_unlock(std::uint64_t mutex) {
     auto* services = kernel_services();
-    return orbis_pthread_result(services == nullptr
+    return orbis_errno_result(services == nullptr
                                     ? runtime::KernelServices::kPosixEinval
                                     : services->mutex_unlock(static_cast<GuestAddress>(mutex)));
 }
 
 std::uint64_t orbis_mutex_destroy(std::uint64_t mutex) {
     auto* services = kernel_services();
-    return orbis_pthread_result(services == nullptr
+    return orbis_errno_result(services == nullptr
                                     ? runtime::KernelServices::kPosixEinval
                                     : services->mutex_destroy(static_cast<GuestAddress>(mutex)));
+}
+
+std::uint64_t cond_attr_init(std::uint64_t attribute) {
+    auto* services = kernel_services();
+    return services == nullptr ? runtime::KernelServices::kPosixEinval
+                               : static_cast<std::uint64_t>(services->cond_attr_init(
+                                     static_cast<GuestAddress>(attribute)));
+}
+
+std::uint64_t cond_attr_destroy(std::uint64_t attribute) {
+    auto* services = kernel_services();
+    return services == nullptr ? runtime::KernelServices::kPosixEinval
+                               : static_cast<std::uint64_t>(services->cond_attr_destroy(
+                                     static_cast<GuestAddress>(attribute)));
+}
+
+std::uint64_t cond_attr_get_clock(std::uint64_t attribute, std::uint64_t output) {
+    auto* services = kernel_services();
+    return services == nullptr ? runtime::KernelServices::kPosixEinval
+                               : static_cast<std::uint64_t>(services->cond_attr_get_clock(
+                                     static_cast<GuestAddress>(attribute),
+                                     static_cast<GuestAddress>(output)));
+}
+
+std::uint64_t cond_attr_set_clock(std::uint64_t attribute, std::uint64_t clock_id) {
+    auto* services = kernel_services();
+    return services == nullptr ? runtime::KernelServices::kPosixEinval
+                               : static_cast<std::uint64_t>(services->cond_attr_set_clock(
+                                     static_cast<GuestAddress>(attribute),
+                                     static_cast<std::uint32_t>(clock_id)));
+}
+
+std::uint64_t cond_attr_get_pshared(std::uint64_t attribute, std::uint64_t output) {
+    auto* services = kernel_services();
+    return services == nullptr ? runtime::KernelServices::kPosixEinval
+                               : static_cast<std::uint64_t>(services->cond_attr_get_pshared(
+                                     static_cast<GuestAddress>(attribute),
+                                     static_cast<GuestAddress>(output)));
+}
+
+std::uint64_t cond_attr_set_pshared(std::uint64_t attribute, std::uint64_t pshared) {
+    auto* services = kernel_services();
+    return services == nullptr ? runtime::KernelServices::kPosixEinval
+                               : static_cast<std::uint64_t>(services->cond_attr_set_pshared(
+                                     static_cast<GuestAddress>(attribute),
+                                     static_cast<int>(pshared)));
+}
+
+std::uint64_t orbis_cond_attr_init(std::uint64_t attribute) {
+    return orbis_errno_result(static_cast<int>(cond_attr_init(attribute)));
+}
+
+std::uint64_t orbis_cond_attr_destroy(std::uint64_t attribute) {
+    return orbis_errno_result(static_cast<int>(cond_attr_destroy(attribute)));
+}
+
+std::uint64_t orbis_cond_attr_get_clock(std::uint64_t attribute, std::uint64_t output) {
+    return orbis_errno_result(static_cast<int>(cond_attr_get_clock(attribute, output)));
+}
+
+std::uint64_t orbis_cond_attr_set_clock(std::uint64_t attribute, std::uint64_t clock_id) {
+    return orbis_errno_result(static_cast<int>(cond_attr_set_clock(attribute, clock_id)));
+}
+
+std::uint64_t orbis_cond_attr_get_pshared(std::uint64_t attribute, std::uint64_t output) {
+    return orbis_errno_result(static_cast<int>(cond_attr_get_pshared(attribute, output)));
+}
+
+std::uint64_t orbis_cond_attr_set_pshared(std::uint64_t attribute, std::uint64_t pshared) {
+    return orbis_errno_result(static_cast<int>(cond_attr_set_pshared(attribute, pshared)));
 }
 
 std::uint64_t posix_cond_init(std::uint64_t cond, std::uint64_t attributes) {
@@ -174,7 +258,7 @@ std::uint64_t sce_cond_init(std::uint64_t cond, std::uint64_t attributes,
                             : services->cond_init(static_cast<GuestAddress>(cond),
                                                   static_cast<GuestAddress>(attributes),
                                                   static_cast<GuestAddress>(name));
-    return orbis_pthread_result(result);
+    return orbis_errno_result(result);
 }
 
 std::uint64_t posix_cond_destroy(std::uint64_t cond) {
@@ -192,6 +276,32 @@ std::uint64_t posix_cond_wait(std::uint64_t cond, std::uint64_t mutex) {
                                      static_cast<GuestAddress>(mutex)));
 }
 
+
+std::uint64_t posix_cond_timed_wait(std::uint64_t cond, std::uint64_t mutex,
+                                    std::uint64_t absolute_timeout) {
+    auto* services = kernel_services();
+    return services == nullptr ? runtime::KernelServices::kPosixEinval
+                               : static_cast<std::uint64_t>(services->cond_timed_wait(
+                                     static_cast<GuestAddress>(cond),
+                                     static_cast<GuestAddress>(mutex),
+                                     static_cast<GuestAddress>(absolute_timeout)));
+}
+
+std::uint64_t posix_cond_reltimed_wait(std::uint64_t cond, std::uint64_t mutex,
+                                       std::uint64_t microseconds) {
+    auto* services = kernel_services();
+    return services == nullptr ? runtime::KernelServices::kPosixEinval
+                               : static_cast<std::uint64_t>(services->cond_reltimed_wait(
+                                     static_cast<GuestAddress>(cond),
+                                     static_cast<GuestAddress>(mutex), microseconds));
+}
+
+std::uint64_t orbis_cond_reltimed_wait(std::uint64_t cond, std::uint64_t mutex,
+                                       std::uint64_t microseconds) {
+    return orbis_errno_result(
+        static_cast<int>(posix_cond_reltimed_wait(cond, mutex, microseconds)));
+}
+
 std::uint64_t posix_cond_signal(std::uint64_t cond) {
     auto* services = kernel_services();
     return services == nullptr ? runtime::KernelServices::kPosixEinval
@@ -207,19 +317,180 @@ std::uint64_t posix_cond_broadcast(std::uint64_t cond) {
 }
 
 std::uint64_t orbis_cond_destroy(std::uint64_t cond) {
-    return orbis_pthread_result(static_cast<int>(posix_cond_destroy(cond)));
+    return orbis_errno_result(static_cast<int>(posix_cond_destroy(cond)));
 }
 
 std::uint64_t orbis_cond_wait(std::uint64_t cond, std::uint64_t mutex) {
-    return orbis_pthread_result(static_cast<int>(posix_cond_wait(cond, mutex)));
+    return orbis_errno_result(static_cast<int>(posix_cond_wait(cond, mutex)));
 }
 
 std::uint64_t orbis_cond_signal(std::uint64_t cond) {
-    return orbis_pthread_result(static_cast<int>(posix_cond_signal(cond)));
+    return orbis_errno_result(static_cast<int>(posix_cond_signal(cond)));
 }
 
 std::uint64_t orbis_cond_broadcast(std::uint64_t cond) {
-    return orbis_pthread_result(static_cast<int>(posix_cond_broadcast(cond)));
+    return orbis_errno_result(static_cast<int>(posix_cond_broadcast(cond)));
+}
+
+std::uint64_t posix_nanosleep(std::uint64_t request, std::uint64_t remaining) {
+    auto* services = kernel_services();
+    return services == nullptr
+               ? posix_failure(runtime::KernelServices::kPosixEinval)
+               : posix_result(services->nanosleep(static_cast<GuestAddress>(request),
+                                                  static_cast<GuestAddress>(remaining)));
+}
+
+std::uint64_t sce_kernel_nanosleep(std::uint64_t request, std::uint64_t remaining) {
+    auto* services = kernel_services();
+    return orbis_errno_result(
+        services == nullptr ? runtime::KernelServices::kPosixEinval
+                            : services->nanosleep(static_cast<GuestAddress>(request),
+                                                  static_cast<GuestAddress>(remaining)));
+}
+
+std::uint64_t posix_usleep(std::uint64_t microseconds) {
+    std::this_thread::sleep_for(std::chrono::microseconds(static_cast<std::uint32_t>(microseconds)));
+    return 0;
+}
+
+std::uint64_t sce_kernel_usleep(std::uint64_t microseconds) {
+    std::this_thread::sleep_for(std::chrono::microseconds(static_cast<std::uint32_t>(microseconds)));
+    return 0;
+}
+
+std::uint64_t posix_sleep(std::uint64_t seconds) {
+    std::this_thread::sleep_for(std::chrono::seconds(static_cast<std::uint32_t>(seconds)));
+    return 0;
+}
+
+std::uint64_t sce_kernel_sleep(std::uint64_t seconds) {
+    std::this_thread::sleep_for(std::chrono::seconds(static_cast<std::uint32_t>(seconds)));
+    return 0;
+}
+
+std::uint64_t guest_yield() {
+    std::this_thread::yield();
+    return 0;
+}
+
+std::uint64_t posix_sem_init(std::uint64_t semaphore, std::uint64_t pshared,
+                             std::uint64_t value) {
+    auto* services = kernel_services();
+    if (services == nullptr) {
+        return posix_failure(runtime::KernelServices::kPosixEinval);
+    }
+    return posix_result(services->sem_init(static_cast<GuestAddress>(semaphore),
+                                          static_cast<int>(pshared),
+                                          static_cast<std::uint32_t>(value)));
+}
+
+std::uint64_t posix_sem_destroy(std::uint64_t semaphore) {
+    auto* services = kernel_services();
+    return services == nullptr
+               ? posix_failure(runtime::KernelServices::kPosixEinval)
+               : posix_result(services->sem_destroy(static_cast<GuestAddress>(semaphore)));
+}
+
+std::uint64_t posix_sem_wait(std::uint64_t semaphore) {
+    auto* services = kernel_services();
+    return services == nullptr
+               ? posix_failure(runtime::KernelServices::kPosixEinval)
+               : posix_result(services->sem_wait(static_cast<GuestAddress>(semaphore)));
+}
+
+std::uint64_t posix_sem_try_wait(std::uint64_t semaphore) {
+    auto* services = kernel_services();
+    return services == nullptr
+               ? posix_failure(runtime::KernelServices::kPosixEinval)
+               : posix_result(services->sem_try_wait(static_cast<GuestAddress>(semaphore)));
+}
+
+std::uint64_t posix_sem_timed_wait(std::uint64_t semaphore, std::uint64_t absolute_timeout) {
+    auto* services = kernel_services();
+    return services == nullptr
+               ? posix_failure(runtime::KernelServices::kPosixEinval)
+               : posix_result(services->sem_timed_wait(static_cast<GuestAddress>(semaphore),
+                                                       static_cast<GuestAddress>(absolute_timeout)));
+}
+
+std::uint64_t posix_sem_reltimed_wait(std::uint64_t semaphore, std::uint64_t microseconds) {
+    auto* services = kernel_services();
+    return services == nullptr
+               ? posix_failure(runtime::KernelServices::kPosixEinval)
+               : posix_result(services->sem_reltimed_wait(static_cast<GuestAddress>(semaphore),
+                                                          microseconds));
+}
+
+std::uint64_t posix_sem_post(std::uint64_t semaphore) {
+    auto* services = kernel_services();
+    return services == nullptr
+               ? posix_failure(runtime::KernelServices::kPosixEinval)
+               : posix_result(services->sem_post(static_cast<GuestAddress>(semaphore)));
+}
+
+std::uint64_t posix_sem_get_value(std::uint64_t semaphore, std::uint64_t output) {
+    auto* services = kernel_services();
+    return services == nullptr
+               ? posix_failure(runtime::KernelServices::kPosixEinval)
+               : posix_result(services->sem_get_value(static_cast<GuestAddress>(semaphore),
+                                                      static_cast<GuestAddress>(output)));
+}
+
+std::uint64_t sce_pthread_sem_init(std::uint64_t semaphore, std::uint64_t flag,
+                                   std::uint64_t value, std::uint64_t name) {
+    (void)name;
+    if (flag != 0) {
+        return orbis_errno_result(runtime::KernelServices::kPosixEinval);
+    }
+    auto* services = kernel_services();
+    return orbis_errno_result(
+        services == nullptr ? runtime::KernelServices::kPosixEinval
+                            : services->sem_init(static_cast<GuestAddress>(semaphore), 0,
+                                                 static_cast<std::uint32_t>(value)));
+}
+
+std::uint64_t sce_pthread_sem_destroy(std::uint64_t semaphore) {
+    auto* services = kernel_services();
+    return orbis_errno_result(
+        services == nullptr ? runtime::KernelServices::kPosixEinval
+                            : services->sem_destroy(static_cast<GuestAddress>(semaphore)));
+}
+
+std::uint64_t sce_pthread_sem_wait(std::uint64_t semaphore) {
+    auto* services = kernel_services();
+    return orbis_errno_result(
+        services == nullptr ? runtime::KernelServices::kPosixEinval
+                            : services->sem_wait(static_cast<GuestAddress>(semaphore)));
+}
+
+std::uint64_t sce_pthread_sem_try_wait(std::uint64_t semaphore) {
+    auto* services = kernel_services();
+    return orbis_errno_result(
+        services == nullptr ? runtime::KernelServices::kPosixEinval
+                            : services->sem_try_wait(static_cast<GuestAddress>(semaphore)));
+}
+
+std::uint64_t sce_pthread_sem_timed_wait(std::uint64_t semaphore, std::uint64_t microseconds) {
+    auto* services = kernel_services();
+    return orbis_errno_result(
+        services == nullptr ? runtime::KernelServices::kPosixEinval
+                            : services->sem_reltimed_wait(static_cast<GuestAddress>(semaphore),
+                                                         microseconds));
+}
+
+std::uint64_t sce_pthread_sem_post(std::uint64_t semaphore) {
+    auto* services = kernel_services();
+    return orbis_errno_result(
+        services == nullptr ? runtime::KernelServices::kPosixEinval
+                            : services->sem_post(static_cast<GuestAddress>(semaphore)));
+}
+
+std::uint64_t sce_pthread_sem_get_value(std::uint64_t semaphore, std::uint64_t output) {
+    auto* services = kernel_services();
+    return orbis_errno_result(
+        services == nullptr ? runtime::KernelServices::kPosixEinval
+                            : services->sem_get_value(static_cast<GuestAddress>(semaphore),
+                                                      static_cast<GuestAddress>(output)));
 }
 
 std::uint64_t pthread_create(std::uint64_t thread_out, std::uint64_t attributes,
@@ -306,27 +577,27 @@ std::uint64_t pthread_attr_set_detach_state(std::uint64_t attribute, std::uint64
 }
 
 std::uint64_t orbis_attr_init(std::uint64_t attribute) {
-    return orbis_pthread_result(static_cast<int>(pthread_attr_init(attribute)));
+    return orbis_errno_result(static_cast<int>(pthread_attr_init(attribute)));
 }
 
 std::uint64_t orbis_attr_destroy(std::uint64_t attribute) {
-    return orbis_pthread_result(static_cast<int>(pthread_attr_destroy(attribute)));
+    return orbis_errno_result(static_cast<int>(pthread_attr_destroy(attribute)));
 }
 
 std::uint64_t orbis_attr_get_stack_size(std::uint64_t attribute, std::uint64_t output) {
-    return orbis_pthread_result(static_cast<int>(pthread_attr_get_stack_size(attribute, output)));
+    return orbis_errno_result(static_cast<int>(pthread_attr_get_stack_size(attribute, output)));
 }
 
 std::uint64_t orbis_attr_set_stack_size(std::uint64_t attribute, std::uint64_t stack_size) {
-    return orbis_pthread_result(static_cast<int>(pthread_attr_set_stack_size(attribute, stack_size)));
+    return orbis_errno_result(static_cast<int>(pthread_attr_set_stack_size(attribute, stack_size)));
 }
 
 std::uint64_t orbis_attr_get_detach_state(std::uint64_t attribute, std::uint64_t output) {
-    return orbis_pthread_result(static_cast<int>(pthread_attr_get_detach_state(attribute, output)));
+    return orbis_errno_result(static_cast<int>(pthread_attr_get_detach_state(attribute, output)));
 }
 
 std::uint64_t orbis_attr_set_detach_state(std::uint64_t attribute, std::uint64_t detach_state) {
-    return orbis_pthread_result(static_cast<int>(pthread_attr_set_detach_state(attribute, detach_state)));
+    return orbis_errno_result(static_cast<int>(pthread_attr_set_detach_state(attribute, detach_state)));
 }
 
 runtime::SymbolKey key(const char* nid, const char* library = "libkernel") {
@@ -352,6 +623,34 @@ void register_core(runtime::HleRegistry& registry) {
                                    "sceKernelGetProcessTimeCounterFrequency");
     (void)registry.register_no_arg(key("g0VTBxfJyu0"), current_cpu,
                                    "sceKernelGetCurrentCpu");
+    (void)registry.register_no_arg(key("9BcDykPmo1I"), posix_error_address, "__Error");
+
+    const auto nanosleep_address = reinterpret_cast<GuestAddress>(&posix_nanosleep);
+    const auto usleep_address = reinterpret_cast<GuestAddress>(&posix_usleep);
+    const auto sleep_address = reinterpret_cast<GuestAddress>(&posix_sleep);
+    const auto yield_address = reinterpret_cast<GuestAddress>(&guest_yield);
+    for (const char* library : {"libkernel", "libScePosix"}) {
+        (void)registry.register_function(key("NhpspxdjEKU", library), nanosleep_address,
+                                         "nanosleep");
+        (void)registry.register_function(key("yS8U2TGCe1A", library), nanosleep_address,
+                                         "nanosleep");
+        (void)registry.register_function(key("QcteRwbsnV0", library), usleep_address, "usleep");
+        (void)registry.register_function(key("0wu33hunNdE", library), sleep_address, "sleep");
+        (void)registry.register_function(key("6XG4B33N09g", library), yield_address,
+                                         "sched_yield");
+    }
+    (void)registry.register_function(key("B5GmVDKwpn0", "libScePosix"), yield_address,
+                                     "pthread_yield");
+    (void)registry.register_function(key("T72hz6ffq08"), yield_address, "scePthreadYield");
+    (void)registry.register_function(key("QvsZxomvUHs"),
+                                     reinterpret_cast<GuestAddress>(&sce_kernel_nanosleep),
+                                     "sceKernelNanosleep");
+    (void)registry.register_function(key("1jfXLRVzisc"),
+                                     reinterpret_cast<GuestAddress>(&sce_kernel_usleep),
+                                     "sceKernelUsleep");
+    (void)registry.register_function(key("-ZR+hG7aDHw"),
+                                     reinterpret_cast<GuestAddress>(&sce_kernel_sleep),
+                                     "sceKernelSleep");
     (void)registry.register_no_arg(key("pO96TwzOm5E"), direct_memory_size,
                                    "sceKernelGetDirectMemorySize");
     (void)registry.register_function(key("vSMAm3cxYTY"),
@@ -366,6 +665,51 @@ void register_core(runtime::HleRegistry& registry) {
     (void)registry.register_function(key("UK2Tl2DWUns"),
                                      reinterpret_cast<GuestAddress>(&kernel_close),
                                      "sceKernelClose");
+
+    const auto sem_init_address = reinterpret_cast<GuestAddress>(&posix_sem_init);
+    const auto sem_destroy_address = reinterpret_cast<GuestAddress>(&posix_sem_destroy);
+    const auto sem_wait_address = reinterpret_cast<GuestAddress>(&posix_sem_wait);
+    const auto sem_try_wait_address = reinterpret_cast<GuestAddress>(&posix_sem_try_wait);
+    const auto sem_timed_wait_address = reinterpret_cast<GuestAddress>(&posix_sem_timed_wait);
+    const auto sem_reltimed_wait_address = reinterpret_cast<GuestAddress>(&posix_sem_reltimed_wait);
+    const auto sem_post_address = reinterpret_cast<GuestAddress>(&posix_sem_post);
+    const auto sem_get_value_address = reinterpret_cast<GuestAddress>(&posix_sem_get_value);
+    for (const char* library : {"libkernel", "libScePosix"}) {
+        (void)registry.register_function(key("pDuPEf3m4fI", library), sem_init_address, "sem_init");
+        (void)registry.register_function(key("cDW233RAwWo", library), sem_destroy_address,
+                                         "sem_destroy");
+        (void)registry.register_function(key("YCV5dGGBcCo", library), sem_wait_address, "sem_wait");
+        (void)registry.register_function(key("WBWzsRifCEA", library), sem_try_wait_address,
+                                         "sem_trywait");
+        (void)registry.register_function(key("w5IHyvahg-o", library), sem_timed_wait_address,
+                                         "sem_timedwait");
+        (void)registry.register_function(key("4SbrhCozqQU", library), sem_reltimed_wait_address,
+                                         "sem_reltimedwait_np");
+        (void)registry.register_function(key("IKP8typ0QUk", library), sem_post_address, "sem_post");
+        (void)registry.register_function(key("Bq+LRV-N6Hk", library), sem_get_value_address,
+                                         "sem_getvalue");
+    }
+    (void)registry.register_function(key("GEnUkDZoUwY"),
+                                     reinterpret_cast<GuestAddress>(&sce_pthread_sem_init),
+                                     "scePthreadSemInit");
+    (void)registry.register_function(key("Vwc+L05e6oE"),
+                                     reinterpret_cast<GuestAddress>(&sce_pthread_sem_destroy),
+                                     "scePthreadSemDestroy");
+    (void)registry.register_function(key("C36iRE0F5sE"),
+                                     reinterpret_cast<GuestAddress>(&sce_pthread_sem_wait),
+                                     "scePthreadSemWait");
+    (void)registry.register_function(key("H2a+IN9TP0E"),
+                                     reinterpret_cast<GuestAddress>(&sce_pthread_sem_try_wait),
+                                     "scePthreadSemTrywait");
+    (void)registry.register_function(key("fjN6NQHhK8k"),
+                                     reinterpret_cast<GuestAddress>(&sce_pthread_sem_timed_wait),
+                                     "scePthreadSemTimedwait");
+    (void)registry.register_function(key("aishVAiFaYM"),
+                                     reinterpret_cast<GuestAddress>(&sce_pthread_sem_post),
+                                     "scePthreadSemPost");
+    (void)registry.register_function(key("DjpBvGlaWbQ"),
+                                     reinterpret_cast<GuestAddress>(&sce_pthread_sem_get_value),
+                                     "scePthreadSemGetvalue");
 
     const auto create_address = reinterpret_cast<GuestAddress>(&pthread_create);
     const auto join_address = reinterpret_cast<GuestAddress>(&pthread_join);
@@ -455,9 +799,50 @@ void register_core(runtime::HleRegistry& registry) {
                                          "pthread_mutex_destroy");
     }
 
+    const auto cond_attr_init_address = reinterpret_cast<GuestAddress>(&cond_attr_init);
+    const auto cond_attr_destroy_address = reinterpret_cast<GuestAddress>(&cond_attr_destroy);
+    const auto cond_attr_get_clock_address = reinterpret_cast<GuestAddress>(&cond_attr_get_clock);
+    const auto cond_attr_set_clock_address = reinterpret_cast<GuestAddress>(&cond_attr_set_clock);
+    const auto cond_attr_get_pshared_address = reinterpret_cast<GuestAddress>(&cond_attr_get_pshared);
+    const auto cond_attr_set_pshared_address = reinterpret_cast<GuestAddress>(&cond_attr_set_pshared);
+    for (const char* library : {"libkernel", "libScePosix"}) {
+        (void)registry.register_function(key("mKoTx03HRWA", library), cond_attr_init_address,
+                                         "pthread_condattr_init");
+        (void)registry.register_function(key("dJcuQVn6-Iw", library), cond_attr_destroy_address,
+                                         "pthread_condattr_destroy");
+        (void)registry.register_function(key("cTDYxTUNPhM", library), cond_attr_get_clock_address,
+                                         "pthread_condattr_getclock");
+        (void)registry.register_function(key("EjllaAqAPZo", library), cond_attr_set_clock_address,
+                                         "pthread_condattr_setclock");
+        (void)registry.register_function(key("h0qUqSuOmC8", library), cond_attr_get_pshared_address,
+                                         "pthread_condattr_getpshared");
+        (void)registry.register_function(key("3BpP850hBT4", library), cond_attr_set_pshared_address,
+                                         "pthread_condattr_setpshared");
+    }
+    (void)registry.register_function(key("m5-2bsNfv7s"),
+                                     reinterpret_cast<GuestAddress>(&orbis_cond_attr_init),
+                                     "scePthreadCondattrInit");
+    (void)registry.register_function(key("waPcxYiR3WA"),
+                                     reinterpret_cast<GuestAddress>(&orbis_cond_attr_destroy),
+                                     "scePthreadCondattrDestroy");
+    (void)registry.register_function(key("6qM3kO5S3Oo"),
+                                     reinterpret_cast<GuestAddress>(&orbis_cond_attr_get_clock),
+                                     "scePthreadCondattrGetclock");
+    (void)registry.register_function(key("c-bxj027czs"),
+                                     reinterpret_cast<GuestAddress>(&orbis_cond_attr_set_clock),
+                                     "scePthreadCondattrSetclock");
+    (void)registry.register_function(key("Dn-DRWi9t54"),
+                                     reinterpret_cast<GuestAddress>(&orbis_cond_attr_get_pshared),
+                                     "scePthreadCondattrGetpshared");
+    (void)registry.register_function(key("6xMew9+rZwI"),
+                                     reinterpret_cast<GuestAddress>(&orbis_cond_attr_set_pshared),
+                                     "scePthreadCondattrSetpshared");
+
     const auto cond_init_address = reinterpret_cast<GuestAddress>(&posix_cond_init);
     const auto cond_destroy_address = reinterpret_cast<GuestAddress>(&posix_cond_destroy);
     const auto cond_wait_address = reinterpret_cast<GuestAddress>(&posix_cond_wait);
+    const auto cond_timed_wait_address = reinterpret_cast<GuestAddress>(&posix_cond_timed_wait);
+    const auto cond_reltimed_wait_address = reinterpret_cast<GuestAddress>(&posix_cond_reltimed_wait);
     const auto cond_signal_address = reinterpret_cast<GuestAddress>(&posix_cond_signal);
     const auto cond_broadcast_address = reinterpret_cast<GuestAddress>(&posix_cond_broadcast);
     for (const char* library : {"libkernel", "libScePosix"}) {
@@ -467,6 +852,10 @@ void register_core(runtime::HleRegistry& registry) {
                                          "pthread_cond_destroy");
         (void)registry.register_function(key("Op8TBGY5KHg", library), cond_wait_address,
                                          "pthread_cond_wait");
+        (void)registry.register_function(key("27bAgiJmOh0", library), cond_timed_wait_address,
+                                         "pthread_cond_timedwait");
+        (void)registry.register_function(key("K953PF5u6Pc", library), cond_reltimed_wait_address,
+                                         "pthread_cond_reltimedwait_np");
         (void)registry.register_function(key("2MOy+rUfuhQ", library), cond_signal_address,
                                          "pthread_cond_signal");
         (void)registry.register_function(key("mkx2fVhNMsg", library), cond_broadcast_address,
@@ -481,6 +870,9 @@ void register_core(runtime::HleRegistry& registry) {
     (void)registry.register_function(key("WKAXJ4XBPQ4"),
                                      reinterpret_cast<GuestAddress>(&orbis_cond_wait),
                                      "scePthreadCondWait");
+    (void)registry.register_function(key("BmMjYxmew1w"),
+                                     reinterpret_cast<GuestAddress>(&orbis_cond_reltimed_wait),
+                                     "scePthreadCondTimedwait");
     (void)registry.register_function(key("kDh-NfxgMtE"),
                                      reinterpret_cast<GuestAddress>(&orbis_cond_signal),
                                      "scePthreadCondSignal");
