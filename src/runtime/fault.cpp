@@ -324,6 +324,8 @@ GuestInvocationResult invoke_guest_captured(const EntryTrampoline& trampoline,
 #else
     __builtin_trap();
 #endif
+#else
+    (void)value;
 #endif
     std::terminate();
 }
