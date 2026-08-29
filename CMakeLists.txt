@@ -6,6 +6,22 @@ option(NYXORA_ENABLE_WERROR "Treat warnings as errors" OFF)
 
 find_package(Threads REQUIRED)
 
+include(FetchContent)
+set(ZYDIS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(ZYDIS_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+set(ZYDIS_BUILD_MAN OFF CACHE BOOL "" FORCE)
+set(ZYDIS_BUILD_DOXYGEN OFF CACHE BOOL "" FORCE)
+set(ZYDIS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(ZYDIS_FEATURE_ENCODER OFF CACHE BOOL "" FORCE)
+set(ZYDIS_FEATURE_FORMATTER OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(Zydis
+    GIT_REPOSITORY https://github.com/zyantific/zydis.git
+    GIT_TAG a2278f1d254e492f6a6b39f6cb5d1f5d515659dc
+    GIT_SHALLOW TRUE
+    GIT_SUBMODULES_RECURSE TRUE
+)
+FetchContent_MakeAvailable(Zydis)
+
 add_library(nyxora_core
     src/loader/elf64.cpp
     src/loader/dynamic.cpp
@@ -14,7 +30,9 @@ add_library(nyxora_core
     src/runtime/late_imports.cpp
     src/runtime/hle_registry.cpp
     src/runtime/fault.cpp
+    src/runtime/cpu_patches.cpp
     src/runtime/guest_thread.cpp
+    src/runtime/thread_manager.cpp
     src/runtime/native_thread.cpp
     src/runtime/tls.cpp
     src/memory/guest_address_space.cpp
@@ -28,7 +46,7 @@ add_library(NyxoraRT::core ALIAS nyxora_core)
 
 target_include_directories(nyxora_core PUBLIC include)
 target_compile_features(nyxora_core PUBLIC cxx_std_20)
-target_link_libraries(nyxora_core PUBLIC Threads::Threads)
+target_link_libraries(nyxora_core PUBLIC Threads::Threads PRIVATE Zydis)
 
 if(MSVC)
     target_compile_options(nyxora_core PRIVATE /W4 /permissive-)
@@ -56,7 +74,9 @@ if(NYXORA_BUILD_TESTS)
         tests/late_import_tests.cpp
         tests/hle_tests.cpp
         tests/fault_tests.cpp
+        tests/cpu_patch_tests.cpp
         tests/guest_thread_tests.cpp
+        tests/thread_manager_tests.cpp
         tests/runtime_tests.cpp
         tests/guest_address_space_tests.cpp
         tests/native_arena_tests.cpp

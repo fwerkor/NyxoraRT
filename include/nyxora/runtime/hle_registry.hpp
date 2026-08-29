@@ -5,7 +5,6 @@
 #include <memory>
 #include <optional>
 #include <string>
-#include <vector>
 
 #include "nyxora/base/types.hpp"
 #include "nyxora/memory/native_arena.hpp"
@@ -20,14 +19,15 @@ public:
     explicit HleRegistry(SymbolRegistry& symbols);
     ~HleRegistry();
 
+    bool register_function(SymbolKey key, GuestAddress function, std::string debug_name);
     bool register_no_arg(SymbolKey key, NoArgHleFunction function, std::string debug_name);
     [[nodiscard]] std::size_t size() const noexcept { return registered_; }
 
 private:
-    class NoArgBridgeTable;
+    class BridgeTable;
 
     SymbolRegistry& symbols_;
-    std::unique_ptr<NoArgBridgeTable> bridges_;
+    std::unique_ptr<BridgeTable> bridges_;
     std::size_t registered_{};
 };
 

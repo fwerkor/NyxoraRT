@@ -165,3 +165,31 @@ NYXORA_TEST(runtime_invoke_entry_uses_native_guest_thread_path) {
     NYXORA_CHECK(nyxora::runtime::ScopedGuestThreadContext::current() == nullptr);
 #endif
 }
+
+
+NYXORA_TEST(runtime_rewrites_fs_tcb_access_and_executes_it_on_supported_x64_hosts) {
+#if (defined(__linux__) && defined(__x86_64__)) || (defined(_WIN32) && defined(_M_X64))
+    auto bytes = test_fixture::sce_dynamic_elf();
+    const std::array<std::byte, 10> entry_code{
+        std::byte{0x64}, std::byte{0x48}, std::byte{0x8b}, std::byte{0x04}, std::byte{0x25},
+        std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0xc3},
+    };
+    std::memcpy(bytes.data() + test_fixture::SceImageLayout::load_offset + 0x40,
+                entry_code.data(), entry_code.size());
+
+    const auto page = nyxora::memory::NativeArena::page_size();
+    auto memory = nyxora::memory::GuestAddressSpace::reserve_native(page * 3U);
+    NYXORA_CHECK(memory.has_value());
+    const auto base = memory->native_base();
+    nyxora::runtime::Runtime runtime(std::make_unique<nyxora::gpu::NullBackend>(),
+                                     std::move(*memory));
+    const auto image = nyxora::loader::Elf64Image::from_bytes(std::move(bytes));
+    const auto module = runtime.load_image(image, "fs-tcb.elf", base);
+
+    const auto patched = runtime.memory().view(module.entry, entry_code.size());
+    NYXORA_CHECK(patched.size() == entry_code.size());
+    NYXORA_CHECK(patched[0] == std::byte{0x65});
+    const auto result = runtime.invoke_entry(module, 64 * 1024);
+    NYXORA_CHECK(result != 0);
+#endif
+}

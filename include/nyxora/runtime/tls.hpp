@@ -100,6 +100,8 @@ private:
     GuestThreadContext* previous_{};
 };
 
+[[nodiscard]] std::optional<std::uint32_t> windows_guest_tcb_teb_offset() noexcept;
+
 class ScopedGuestSegment {
 public:
     explicit ScopedGuestSegment(GuestThreadContext& context);
@@ -115,6 +117,8 @@ public:
 private:
 #if defined(__linux__) && defined(__x86_64__)
     std::uintptr_t previous_base_{};
+#elif defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
+    void* previous_windows_tcb_{};
 #endif
     bool active_{};
 };

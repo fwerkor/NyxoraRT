@@ -20,6 +20,7 @@
 #include "nyxora/runtime/hle_registry.hpp"
 #include "nyxora/runtime/symbol_registry.hpp"
 #include "nyxora/runtime/tls.hpp"
+#include "nyxora/runtime/thread_manager.hpp"
 
 namespace nyxora::runtime {
 
@@ -60,6 +61,8 @@ public:
     [[nodiscard]] HleRegistry& hle() noexcept { return *hle_; }
     [[nodiscard]] const HleRegistry& hle() const noexcept { return *hle_; }
     [[nodiscard]] const TlsRegistry& tls_registry() const noexcept { return tls_registry_; }
+    [[nodiscard]] GuestThreadManager& thread_manager() noexcept { return thread_manager_; }
+    [[nodiscard]] const GuestThreadManager& thread_manager() const noexcept { return thread_manager_; }
     [[nodiscard]] LateImportTable* late_imports() noexcept {
         return late_imports_ ? &*late_imports_ : nullptr;
     }
@@ -75,6 +78,7 @@ private:
     memory::GuestAddressSpace memory_;
     SymbolRegistry symbols_;
     TlsRegistry tls_registry_;
+    GuestThreadManager thread_manager_;
     std::optional<LateImportTable> late_imports_;
     std::unique_ptr<HleRegistry> hle_;
     std::unique_ptr<gpu::Backend> gpu_;

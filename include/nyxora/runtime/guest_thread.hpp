@@ -13,6 +13,8 @@
 
 namespace nyxora::runtime {
 
+class GuestThreadManager;
+
 class GuestThread {
 public:
     GuestThread() = default;
@@ -25,7 +27,8 @@ public:
 
     [[nodiscard]] static std::optional<GuestThread> start(
         const TlsRegistry& tls_registry, GuestAddress entry, GuestSize stack_size,
-        std::uint64_t arg0 = 0, std::uint64_t arg1 = 0, std::uint64_t arg2 = 0);
+        std::uint64_t arg0 = 0, std::uint64_t arg1 = 0, std::uint64_t arg2 = 0,
+        GuestThreadManager* thread_manager = nullptr);
 
     [[nodiscard]] bool joinable() const noexcept { return worker_.joinable(); }
     GuestInvocationResult join();

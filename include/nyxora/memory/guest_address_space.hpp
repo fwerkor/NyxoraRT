@@ -46,6 +46,7 @@ public:
     bool protect(GuestAddress base, GuestSize size, Protection protection);
     bool write(GuestAddress address, std::span<const std::byte> bytes);
     bool patch(GuestAddress address, std::span<const std::byte> bytes);
+    bool flush_instruction_cache(GuestAddress address, GuestSize size) noexcept;
     bool zero(GuestAddress address, GuestSize size);
 
     [[nodiscard]] std::span<const std::byte> view(GuestAddress address, GuestSize size) const;

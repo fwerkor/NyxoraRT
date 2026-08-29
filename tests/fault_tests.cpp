@@ -7,7 +7,7 @@
 #include <cstddef>
 
 NYXORA_TEST(guest_fault_capture_reports_invalid_memory_access) {
-#if !defined(_WIN32) && defined(__x86_64__)
+#if defined(__x86_64__) || defined(_M_X64)
     const auto page = nyxora::memory::NativeArena::page_size();
     auto code = nyxora::memory::NativeArena::reserve(page);
     NYXORA_CHECK(code.has_value());

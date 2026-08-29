@@ -1,4 +1,5 @@
 #include "nyxora/hle/libkernel.hpp"
+#include "nyxora/runtime/thread_manager.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -29,10 +30,31 @@ std::uint64_t current_cpu() {
     return 0;
 }
 
-runtime::SymbolKey key(const char* nid) {
+std::uint64_t pthread_create(std::uint64_t thread_out, std::uint64_t attributes,
+                             std::uint64_t start_routine, std::uint64_t argument) {
+    auto* manager = runtime::GuestThreadManager::current();
+    if (manager == nullptr || thread_out == 0) {
+        return runtime::GuestThreadManager::kPosixEinval;
+    }
+    return static_cast<std::uint64_t>(manager->create(
+        reinterpret_cast<GuestAddress*>(thread_out), static_cast<GuestAddress>(attributes),
+        static_cast<GuestAddress>(start_routine), static_cast<GuestAddress>(argument)));
+}
+
+std::uint64_t pthread_join(std::uint64_t thread, std::uint64_t return_value) {
+    auto* manager = runtime::GuestThreadManager::current();
+    if (manager == nullptr) {
+        return runtime::GuestThreadManager::kPosixEinval;
+    }
+    return static_cast<std::uint64_t>(manager->join(
+        static_cast<GuestAddress>(thread),
+        return_value == 0 ? nullptr : reinterpret_cast<GuestAddress*>(return_value)));
+}
+
+runtime::SymbolKey key(const char* nid, const char* library = "libkernel") {
     return runtime::SymbolKey{
         .nid = nid,
-        .library = "libkernel",
+        .library = library,
         .module = "libkernel",
         .library_version = 1,
         .module_major = 1,
@@ -52,6 +74,15 @@ void register_core(runtime::HleRegistry& registry) {
                                    "sceKernelGetProcessTimeCounterFrequency");
     (void)registry.register_no_arg(key("g0VTBxfJyu0"), current_cpu,
                                    "sceKernelGetCurrentCpu");
+
+    const auto create_address = reinterpret_cast<GuestAddress>(&pthread_create);
+    const auto join_address = reinterpret_cast<GuestAddress>(&pthread_join);
+    for (const char* library : {"libkernel", "libScePosix"}) {
+        (void)registry.register_function(key("OxhIB8LB-PQ", library), create_address,
+                                         "pthread_create");
+        (void)registry.register_function(key("h9CcP3J0oVM", library), join_address,
+                                         "pthread_join");
+    }
 }
 
 } // namespace nyxora::hle::libkernel

@@ -174,6 +174,25 @@ bool GuestAddressSpace::patch(GuestAddress address, std::span<const std::byte> b
     return copied;
 }
 
+bool GuestAddressSpace::flush_instruction_cache(GuestAddress address, GuestSize size) noexcept {
+    if (size == 0) {
+        return true;
+    }
+    const auto it = find_region(address);
+    if (it == regions_.end()) {
+        return false;
+    }
+    const auto offset = address - it->second.info.base;
+    if (size > it->second.info.size - offset) {
+        return false;
+    }
+    if (!native_) {
+        return true;
+    }
+    const auto arena_offset = native_offset(address);
+    return arena_offset && native_->flush_instruction_cache(*arena_offset, size);
+}
+
 bool GuestAddressSpace::zero(GuestAddress address, GuestSize size) {
     auto it = find_region(address);
     if (it == regions_.end() || !has(it->second.info.protection, Protection::write)) {

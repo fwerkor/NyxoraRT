@@ -1,5 +1,6 @@
 #include "nyxora/runtime/runtime.hpp"
 #include "nyxora/hle/libkernel.hpp"
+#include "nyxora/runtime/cpu_patches.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -52,8 +53,8 @@ Runtime::Runtime(std::unique_ptr<gpu::Backend> gpu_backend)
     : Runtime(std::move(gpu_backend), memory::GuestAddressSpace{}) {}
 
 Runtime::Runtime(std::unique_ptr<gpu::Backend> gpu_backend, memory::GuestAddressSpace memory)
-    : memory_(std::move(memory)), late_imports_(LateImportTable::create()),
-      gpu_(std::move(gpu_backend)) {
+    : memory_(std::move(memory)), thread_manager_(tls_registry_),
+      late_imports_(LateImportTable::create()), gpu_(std::move(gpu_backend)) {
     if (!gpu_) {
         throw std::invalid_argument("Runtime requires a GPU backend");
     }
@@ -104,6 +105,16 @@ LoadedModule Runtime::load_image(const loader::Elf64Image& image, std::filesyste
             !memory_.zero(checked_address(guest_base, segment.file_size),
                           segment.memory_size - segment.file_size)) {
             throw std::runtime_error("unable to initialize ELF BSS range");
+        }
+        if (memory::has(final_protection, memory::Protection::execute) && segment.file_size != 0) {
+            const auto patches = patch_tcb_accesses(memory_, guest_base, segment.file_size,
+                                                    host_tcb_patch_policy());
+            if (!patches) {
+                throw std::runtime_error("unable to inspect executable segment for CPU patches");
+            }
+            if (patches->unsupported != 0) {
+                throw std::runtime_error("executable segment contains unsupported guest TCB accesses");
+            }
         }
         if (!memory_.protect(guest_base, segment.memory_size, final_protection)) {
             throw std::runtime_error("unable to apply ELF segment protection");
@@ -169,6 +180,7 @@ std::uint64_t Runtime::invoke_entry(const LoadedModule& module, GuestSize stack_
         throw std::runtime_error("unable to initialize native guest thread execution state");
     }
 
+    ScopedGuestThreadManager manager_scope(thread_manager_);
     ScopedGuestThreadContext context_scope(*thread);
     ScopedGuestSegment segment_scope(*thread);
     const auto result = invoke_guest_captured(*trampoline, module.entry, stack->top(),
@@ -183,7 +195,8 @@ GuestThread Runtime::start_thread(const LoadedModule& module, GuestSize stack_si
                                   std::uint64_t arg0, std::uint64_t arg1,
                                   std::uint64_t arg2) {
     validate_native_entry(memory_, module);
-    auto thread = GuestThread::start(tls_registry_, module.entry, stack_size, arg0, arg1, arg2);
+    auto thread = GuestThread::start(tls_registry_, module.entry, stack_size, arg0, arg1, arg2,
+                                     &thread_manager_);
     if (!thread) {
         throw std::runtime_error("unable to initialize guest thread execution state");
     }

@@ -4,7 +4,11 @@
 #include <sstream>
 #include <string>
 
-#if !defined(_WIN32) && defined(__x86_64__)
+#if defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <mutex>
+#elif defined(__x86_64__)
 #include <array>
 #include <csignal>
 #include <exception>
@@ -19,7 +23,63 @@
 namespace nyxora::runtime {
 namespace {
 
-#if !defined(_WIN32) && defined(__x86_64__)
+#if defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
+struct ActiveCapture {
+    GuestFault* fault{};
+    EntryRecoveryState* recovery{};
+    GuestAddress recovery_address{};
+};
+
+std::once_flag install_once;
+thread_local ActiveCapture* active_capture = nullptr;
+
+GuestFaultKind windows_fault_kind(DWORD code) noexcept {
+    if (code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_IN_PAGE_ERROR) {
+        return GuestFaultKind::access_violation;
+    }
+    if (code == EXCEPTION_ILLEGAL_INSTRUCTION) {
+        return GuestFaultKind::illegal_instruction;
+    }
+    return GuestFaultKind::unknown;
+}
+
+LONG CALLBACK guest_vectored_handler(EXCEPTION_POINTERS* pointers) noexcept {
+    auto* capture = active_capture;
+    if (capture == nullptr || capture->fault == nullptr || capture->recovery == nullptr ||
+        capture->recovery->host_stack == 0 || capture->recovery_address == 0 ||
+        pointers == nullptr || pointers->ExceptionRecord == nullptr || pointers->ContextRecord == nullptr) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    const auto code = pointers->ExceptionRecord->ExceptionCode;
+    const auto kind = windows_fault_kind(code);
+    if (kind == GuestFaultKind::unknown) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    GuestAddress address = 0;
+    if ((code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_IN_PAGE_ERROR) &&
+        pointers->ExceptionRecord->NumberParameters >= 2) {
+        address = static_cast<GuestAddress>(pointers->ExceptionRecord->ExceptionInformation[1]);
+    }
+    *capture->fault = GuestFault{
+        .kind = kind,
+        .native_code = static_cast<int>(code),
+        .address = address,
+        .instruction_pointer = static_cast<GuestAddress>(pointers->ContextRecord->Rip),
+    };
+    pointers->ContextRecord->Rsp = capture->recovery->host_stack;
+    pointers->ContextRecord->Rip = capture->recovery_address;
+    return EXCEPTION_CONTINUE_EXECUTION;
+}
+
+void install_handlers() {
+    if (::AddVectoredExceptionHandler(1, guest_vectored_handler) == nullptr) {
+        throw std::runtime_error("unable to install guest vectored exception handler");
+    }
+}
+#elif defined(__x86_64__)
+
 struct SignalState {
     int signal_number{};
     struct sigaction previous {};
@@ -194,10 +254,7 @@ GuestInvocationResult invoke_guest_captured(const EntryTrampoline& trampoline,
                                              GuestAddress entry, GuestAddress stack_top,
                                              std::uint64_t arg0, std::uint64_t arg1,
                                              std::uint64_t arg2) {
-#if defined(_WIN32)
-    return GuestInvocationResult{.value = trampoline.invoke(entry, stack_top, arg0, arg1, arg2),
-                                 .fault = std::nullopt};
-#elif defined(__x86_64__)
+#if (defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))) || defined(__x86_64__)
     std::call_once(install_once, install_handlers);
 
     EntryRecoveryState recovery{};

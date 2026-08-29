@@ -1,4 +1,5 @@
 #include "nyxora/runtime/guest_thread.hpp"
+#include "nyxora/runtime/thread_manager.hpp"
 
 #include <stdexcept>
 #include <utility>
@@ -24,7 +25,8 @@ GuestThread& GuestThread::operator=(GuestThread&& other) noexcept {
 std::optional<GuestThread> GuestThread::start(const TlsRegistry& tls_registry,
                                               GuestAddress entry, GuestSize stack_size,
                                               std::uint64_t arg0, std::uint64_t arg1,
-                                              std::uint64_t arg2) {
+                                              std::uint64_t arg2,
+                                              GuestThreadManager* thread_manager) {
     if (entry == 0) {
         return std::nullopt;
     }
@@ -39,8 +41,9 @@ std::optional<GuestThread> GuestThread::start(const TlsRegistry& tls_registry,
     auto state = std::make_unique<State>(std::move(*stack), std::move(*trampoline),
                                          std::move(*context));
     auto* raw_state = state.get();
-    std::thread worker([raw_state, entry, arg0, arg1, arg2] {
+    std::thread worker([raw_state, entry, arg0, arg1, arg2, thread_manager] {
         try {
+            ScopedGuestThreadManager manager_scope(thread_manager);
             ScopedGuestThreadContext context_scope(raw_state->context);
             ScopedGuestSegment segment_scope(raw_state->context);
             raw_state->result = invoke_guest_captured(raw_state->trampoline, entry,

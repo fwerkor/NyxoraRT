@@ -4,12 +4,16 @@
 #include <cstring>
 #include <exception>
 #include <limits>
+#include <mutex>
 #include <stdexcept>
 
 #if defined(__linux__) && defined(__x86_64__)
 #include <asm/prctl.h>
 #include <sys/syscall.h>
 #include <unistd.h>
+#elif defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
 #endif
 
 namespace nyxora::runtime {
@@ -29,6 +33,21 @@ std::optional<std::size_t> aligned_offset(const void* storage, std::size_t align
     const auto aligned = (base + alignment - 1U) & ~(static_cast<std::uintptr_t>(alignment) - 1U);
     return static_cast<std::size_t>(aligned - base);
 }
+
+#if defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
+// Windows x64 exposes the first 64 Win32 TLS slots inline in the TEB at GS:[0x1480].
+// Only those slots can replace a guest FS:[0] access in-place without a trampoline.
+constexpr DWORD kDirectTebTlsSlotCount = 64;
+constexpr std::uint32_t kTebTlsSlotsOffset = 0x1480;
+static_assert(sizeof(void*) == 8);
+std::once_flag windows_tcb_slot_once;
+DWORD windows_tcb_slot = TLS_OUT_OF_INDEXES;
+
+DWORD get_windows_tcb_slot() noexcept {
+    std::call_once(windows_tcb_slot_once, [] { windows_tcb_slot = ::TlsAlloc(); });
+    return windows_tcb_slot;
+}
+#endif
 
 #if defined(__linux__) && defined(__x86_64__)
 bool get_gs_base(std::uintptr_t& base) noexcept {
@@ -196,9 +215,23 @@ GuestThreadContext* ScopedGuestThreadContext::current() noexcept {
     return current_context;
 }
 
+std::optional<std::uint32_t> windows_guest_tcb_teb_offset() noexcept {
+#if defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
+    const auto slot = get_windows_tcb_slot();
+    if (slot == TLS_OUT_OF_INDEXES || slot >= kDirectTebTlsSlotCount) {
+        return std::nullopt;
+    }
+    return kTebTlsSlotsOffset + slot * static_cast<std::uint32_t>(sizeof(void*));
+#else
+    return std::nullopt;
+#endif
+}
+
 bool ScopedGuestSegment::supported() noexcept {
 #if defined(__linux__) && defined(__x86_64__)
     return true;
+#elif defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
+    return windows_guest_tcb_teb_offset().has_value();
 #else
     return false;
 #endif
@@ -211,6 +244,12 @@ std::optional<std::uintptr_t> ScopedGuestSegment::current_base() noexcept {
         return std::nullopt;
     }
     return base;
+#elif defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
+    const auto slot = get_windows_tcb_slot();
+    if (slot == TLS_OUT_OF_INDEXES || slot >= kDirectTebTlsSlotCount) {
+        return std::nullopt;
+    }
+    return reinterpret_cast<std::uintptr_t>(::TlsGetValue(slot));
 #else
     return std::nullopt;
 #endif
@@ -223,6 +262,16 @@ ScopedGuestSegment::ScopedGuestSegment(GuestThreadContext& context) {
         throw std::runtime_error("unable to bind guest TCB to GS base");
     }
     active_ = true;
+#elif defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
+    const auto slot = get_windows_tcb_slot();
+    if (slot == TLS_OUT_OF_INDEXES || slot >= kDirectTebTlsSlotCount) {
+        throw std::runtime_error("unable to allocate an inline Windows guest TCB TLS slot");
+    }
+    previous_windows_tcb_ = ::TlsGetValue(slot);
+    if (::TlsSetValue(slot, context.tcb()) == 0) {
+        throw std::runtime_error("unable to bind guest TCB to the Windows TLS slot");
+    }
+    active_ = true;
 #else
     (void)context;
 #endif
@@ -231,6 +280,10 @@ ScopedGuestSegment::ScopedGuestSegment(GuestThreadContext& context) {
 ScopedGuestSegment::~ScopedGuestSegment() {
 #if defined(__linux__) && defined(__x86_64__)
     if (active_ && !set_gs_base(previous_base_)) {
+        std::terminate();
+    }
+#elif defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
+    if (active_ && ::TlsSetValue(get_windows_tcb_slot(), previous_windows_tcb_) == 0) {
         std::terminate();
     }
 #endif
