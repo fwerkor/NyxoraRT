@@ -24,7 +24,7 @@ The initial framework already provides:
 - buffered and identity-mapped native guest memory with W^X transitions during loading/relocation;
 - guarded guest stacks plus an x86-64 entry trampoline that switches `RSP`/`RBP` and presents SysV guest arguments on Linux, macOS x86-64, and Windows x64;
 - per-thread PT_TLS images with original alignment, initialized bytes, zeroed TLS BSS, a 0x40-byte guest TCB/DTV model, and scoped runtime thread context;
-- decoded x86-64 TCB patching using pinned Zydis 4.1.1: Linux rewrites supported `FS:[TCB]` accesses to GS, while Windows maps `FS:[0]` to an inline Win32 TLS slot in the TEB; unsupported TCB access forms fail loading instead of running with incorrect host TLS semantics;
+- decoded x86-64 TCB patching using pinned Zydis 4.1.1: Linux rewrites supported `FS:[TCB]` accesses to GS; Windows keeps `FS:[0]` as an in-place TEB-slot rewrite and sends supported nonzero `MOV`/`CMP`/`XOR` reads through near side thunks that reload the real TCB pointer; unsupported forms fail loading instead of running with incorrect host TLS semantics;
 - callable late-import thunks backed by immutable RX code and separate RW target/counter slots; unresolved calls are counted and later bindings update stale thunk pointers without rewriting code;
 - a first `libkernel` HLE slice for process-time counters/frequency and current-CPU queries, registered through the same version-aware symbol path as guest exports;
 - `Runtime::invoke_entry()` as a synchronous end-to-end path from a native-backed loaded module through guest stack/thread context to native entry execution;
@@ -47,7 +47,7 @@ To inspect a legal, unencrypted x86-64 ELF test image:
 
 ## Near-term roadmap
 
-1. Extend Windows TCB rewriting beyond `FS:[0]` with explicit trampolines; add pthread attributes and a dedicated safe guest-thread termination primitive before exposing `pthread_exit`.
+1. Grow Windows CPU-patch capacity beyond the current one-page near arena and cover rarer TCB operand forms; add pthread attributes and a dedicated safe guest-thread termination primitive before exposing `pthread_exit`.
 2. Expand `libkernel` HLE into memory, files, synchronization, and sleep/time.
 3. Module lifecycle: dependency loading, init/fini arrays, process parameters, and richer runtime-owned thread tracking.
 4. PM4 command processor with deterministic tracing and state tracking.

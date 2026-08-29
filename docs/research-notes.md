@@ -60,3 +60,7 @@ NyxoraRT now has its own generated x86-64 entry trampoline, guarded guest stacks
 ## Zydis
 
 NyxoraRT uses upstream Zydis 4.1.1 (MIT) as the instruction-decoding boundary for CPU compatibility patches. The dependency is pinned to an exact upstream revision. It is used to establish instruction boundaries and operand semantics before modifying segment prefixes; NyxoraRT does not incorporate GPL patching code from the emulator references.
+
+## Windows nonzero TCB side-thunk milestone
+
+Windows x64 can now execute the supported nonzero `FS:[TCB offset]` read forms without mirroring TCB state. Decoded `MOV`, `CMP`, and `XOR` sites jump to a nearby runtime-owned thunk that reads the actual per-thread TCB pointer from the Win32 TLS slot, performs the offset access, and returns to the next guest instruction. The `FS:[0]` case remains an in-place TEB-slot rewrite. This keeps mutable TCB fields single-sourced and makes unsupported operand shapes or patch-arena exhaustion explicit load failures.

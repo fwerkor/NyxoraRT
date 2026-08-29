@@ -48,7 +48,7 @@ PT_TLS templates are registered per loaded module. Each guest thread receives it
 
 Executable file-backed segments are decoded with pinned Zydis 4.1.1 before final RX protection. NyxoraRT only recognizes the narrow TCB forms currently needed by the ABI: 64-bit `MOV`, `CMP`, or `XOR` from `FS:[disp]` with no base/index and a displacement inside the TCB. This avoids blind byte replacement: a literal `0x64` inside an immediate or displacement is never mistaken for an FS prefix. Decode failures advance conservatively by one byte so mixed code/data executable segments can still be inspected. A recognized form that cannot be represented safely on the current host is a load-time error rather than an implicit compatibility guess.
 
-On Linux x86-64, supported guest FS accesses are rewritten to GS and a scoped segment binding places the guest TCB at the GS base while leaving host FS untouched. On Windows x64, the runtime reserves one of the first 64 Win32 TLS slots and rewrites guest `FS:[0]` to the corresponding `GS:[TEB.TlsSlots+n]` address. That yields the TCB self pointer without replacing Windows' GS-based host TLS. Nonzero Windows TCB offsets remain intentionally unsupported until a trampoline-based rewrite is added.
+On Linux x86-64, supported guest FS accesses are rewritten to GS and a scoped segment binding places the guest TCB at the GS base while leaving host FS untouched. On Windows x64, the runtime reserves one of the first 64 Win32 TLS slots. Guest `FS:[0]` is still rewritten in place to the corresponding `GS:[TEB.TlsSlots+n]` address. Supported nonzero 64-bit `MOV`, `CMP`, and `XOR` reads use a nearby RX side thunk: the original instruction becomes a five-byte near jump, the thunk reloads the real TCB pointer from the TEB slot, dereferences the decoded TCB offset, performs the original operation, and jumps back. `CMP`/`XOR` scratch storage lives below the SysV red zone and cleanup uses flag-preserving instructions, so the original condition codes reach following guest instructions. The current patch arena is one host page per module; exhaustion and operand forms that cannot be preserved safely are load-time errors rather than silent approximations.
 
 POSIX x86-64 native execution installs process-level SIGSEGV/SIGBUS/SIGILL handlers once, while Windows x64 installs a vectored exception handler. Capture state is thread-local and only active around native guest invocation. Both paths record the fault address and instruction pointer, rewrite the native exception context to the entry trampoline's saved host stack/recovery epilogue, and return through normal register restoration. POSIX faults outside an active guest invocation are chained to the previous handler; Windows returns `EXCEPTION_CONTINUE_SEARCH`.
 
@@ -56,7 +56,7 @@ POSIX x86-64 native execution installs process-level SIGSEGV/SIGBUS/SIGILL handl
 
 The next native-execution work is:
 
-- trampoline-based Windows rewrites for nonzero TCB offsets;
+- multi-page or demand-grown Windows CPU-patch arenas plus rarer TCB operand forms that cannot use the current scratch template;
 - pthread attributes, cancellation basics, and stronger thread-state diagnostics; add `pthread_exit` only after an explicit guest-termination recovery path can return through the native trampoline without C++ unwinding across raw guest/generated frames;
 - Windows host-call stack switching for HLE functions that may probe or consume substantial stack;
 - a narrow fallback mechanism for instructions or behaviors that cannot execute directly.
