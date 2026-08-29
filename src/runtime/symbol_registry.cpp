@@ -22,7 +22,15 @@ std::size_t SymbolKeyHash::operator()(const SymbolKey& key) const noexcept {
 }
 
 bool SymbolRegistry::register_symbol(SymbolKey key, SymbolBinding binding) {
-    return symbols_.emplace(std::move(key), std::move(binding)).second;
+    auto [it, inserted] = symbols_.emplace(key, binding);
+    if (inserted) {
+        return true;
+    }
+    if (it->second.hle && !binding.hle) {
+        it->second = std::move(binding);
+        return true;
+    }
+    return false;
 }
 
 std::optional<SymbolBinding> SymbolRegistry::resolve(const SymbolKey& key) const {

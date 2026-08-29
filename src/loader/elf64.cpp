@@ -122,6 +122,12 @@ Elf64Image Elf64Image::from_bytes(std::vector<std::byte> bytes) {
         if (raw.file_size != 0 && !range_fits(raw.offset, raw.file_size, image.bytes_.size())) {
             throw std::runtime_error("ELF segment data is outside the input image");
         }
+        if (raw.type == kProgramTls) {
+            if (image.tls_) {
+                throw std::runtime_error("ELF contains multiple PT_TLS segments");
+            }
+            image.tls_ = TlsSegment{raw.virtual_address, raw.file_size, raw.memory_size, raw.alignment};
+        }
         image.program_headers_.push_back(ProgramHeader{
             .type = raw.type,
             .flags = raw.flags,

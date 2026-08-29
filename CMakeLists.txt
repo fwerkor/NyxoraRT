@@ -6,8 +6,11 @@ option(NYXORA_ENABLE_WERROR "Treat warnings as errors" OFF)
 
 add_library(nyxora_core
     src/loader/elf64.cpp
+    src/loader/dynamic.cpp
     src/runtime/symbol_registry.cpp
+    src/runtime/linker.cpp
     src/memory/guest_address_space.cpp
+    src/memory/native_arena.cpp
     src/gpu/null_backend.cpp
     src/gpu/pm4.cpp
     src/runtime/runtime.cpp
@@ -37,8 +40,12 @@ if(NYXORA_BUILD_TESTS)
     add_executable(nyxora_tests
         tests/main.cpp
         tests/elf64_tests.cpp
+        tests/dynamic_tests.cpp
         tests/symbol_registry_tests.cpp
+        tests/linker_tests.cpp
+        tests/runtime_tests.cpp
         tests/guest_address_space_tests.cpp
+        tests/native_arena_tests.cpp
         tests/gpu_backend_tests.cpp
         tests/pm4_tests.cpp
     )

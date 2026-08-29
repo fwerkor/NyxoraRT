@@ -28,27 +28,22 @@ The loader owns binary parsing only. It produces validated structural informatio
 
 ### Guest memory
 
-`GuestAddressSpace` is the policy boundary for guest mappings. The initial implementation is a deterministic storage-backed model. The next backend will support identity mappings so guest pointers can remain valid native pointers during direct execution.
+`GuestAddressSpace` is the policy boundary for guest mappings. It can use deterministic storage-backed regions or a reserved `NativeArena` whose guest addresses are the actual host virtual addresses. The runtime and linker use the same interface in both modes. Native regions are loaded writable and then transitioned to their final permissions; relocation patching temporarily removes execute permission rather than creating RWX pages.
+
+Native mappings currently require page-aligned region bases. Handling overlapping ELF protection ranges within one host page remains a later VM-policy concern rather than something the loader should special-case.
 
 Memory metadata must remain independent of the Vulkan caches. GPU dirty tracking and page-fault/watch mechanisms should subscribe to mapping changes rather than become the canonical memory model.
 
 ### Symbols and HLE
 
-A symbol is not identified by a NID alone. Resolution includes library/module identity, versions, and symbol kind. Resolution order will eventually be:
+A symbol is not identified by a NID alone. Resolution includes library/module identity, versions, and symbol kind. The current linker resolves local definitions, loaded guest exports, and registered HLE bindings using NID + library/module identity + versions + symbol kind. Guest exports may replace an HLE binding for the same exact key. Missing imports are preserved in a `RelocationReport`, and the module can be relinked after another module or HLE implementation becomes available.
 
-1. local/guest definition when ELF binding requires it;
-2. matching export in an already loaded guest module;
-3. registered HLE implementation;
-4. optional late-binding thunk for unresolved functions;
-5. deterministic unresolved-import diagnostic.
-
-Late thunks are important for rapid compatibility development: unsupported functions can be observed without silently corrupting relocation state.
+The next step is callable late-binding thunks: unresolved functions should be able to survive initial relocation and produce a precise first-use diagnostic while still allowing later resolution.
 
 ### Native CPU execution
 
-Direct execution requires more than jumping to the ELF entry point. The native executor will own:
+The native-memory path is now capable of loading, relocating, changing page protections, and directly executing a synthetic SCE x86-64 entry point. A real guest process still requires more than jumping to that entry point. The native executor will own:
 
-- identity-mapped virtual memory;
 - guest stack creation and stack switching;
 - SysV calling-convention entry/exit trampolines;
 - FS/TLS handling per guest thread;

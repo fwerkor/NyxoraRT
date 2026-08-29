@@ -44,3 +44,9 @@ Useful observations:
 4. Build a deterministic GPU submission interface before Vulkan implementation.
 5. Keep title quirks out of core primitives.
 6. Implement new code independently. No source from the GPL reference projects is incorporated into NyxoraRT.
+
+## Implemented runtime-linker milestone
+
+The first implementation derived only format and architectural facts from the references, then reimplemented the behavior independently. NyxoraRT now parses SCE dynamic-table offsets from `PT_SCE_DYNLIBDATA`, decodes packed module/library identifiers, models PT_TLS metadata, applies the core x86-64 RELA forms used by the references, and keeps unresolved imports retryable.
+
+The memory layer now has an identity-mapped native arena in addition to deterministic buffered storage. The same runtime-linker tests run against the shared memory policy, and an end-to-end synthetic SCE fixture verifies load -> relocate -> W^X protection -> native entry execution without introducing a CPU interpreter.

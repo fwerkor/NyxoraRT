@@ -3,27 +3,17 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
+#include <utility>
 
 #include "nyxora/base/types.hpp"
+#include "nyxora/memory/native_arena.hpp"
+#include "nyxora/memory/protection.hpp"
 
 namespace nyxora::memory {
-
-enum class Protection : std::uint8_t {
-    none = 0,
-    read = 1,
-    write = 2,
-    execute = 4,
-};
-
-constexpr Protection operator|(Protection lhs, Protection rhs) noexcept {
-    return static_cast<Protection>(static_cast<unsigned>(lhs) | static_cast<unsigned>(rhs));
-}
-constexpr bool has(Protection value, Protection flag) noexcept {
-    return (static_cast<unsigned>(value) & static_cast<unsigned>(flag)) != 0;
-}
 
 struct RegionInfo {
     GuestAddress base{};
@@ -34,10 +24,28 @@ struct RegionInfo {
 
 class GuestAddressSpace {
 public:
+    GuestAddressSpace() = default;
+    GuestAddressSpace(const GuestAddressSpace&) = delete;
+    GuestAddressSpace& operator=(const GuestAddressSpace&) = delete;
+    GuestAddressSpace(GuestAddressSpace&&) noexcept = default;
+    GuestAddressSpace& operator=(GuestAddressSpace&&) noexcept = default;
+
+    [[nodiscard]] static std::optional<GuestAddressSpace>
+    reserve_native(GuestSize size, GuestAddress preferred_base = 0);
+
+    [[nodiscard]] bool native_backed() const noexcept { return native_.has_value(); }
+    [[nodiscard]] GuestAddress native_base() const noexcept {
+        return native_ ? native_->base() : GuestAddress{0};
+    }
+    [[nodiscard]] GuestSize native_size() const noexcept {
+        return native_ ? native_->size() : GuestSize{0};
+    }
+
     bool map(GuestAddress base, GuestSize size, Protection protection, std::string name);
     bool unmap(GuestAddress base, GuestSize size);
     bool protect(GuestAddress base, GuestSize size, Protection protection);
     bool write(GuestAddress address, std::span<const std::byte> bytes);
+    bool patch(GuestAddress address, std::span<const std::byte> bytes);
     bool zero(GuestAddress address, GuestSize size);
 
     [[nodiscard]] std::span<const std::byte> view(GuestAddress address, GuestSize size) const;
@@ -50,9 +58,13 @@ private:
         std::vector<std::byte> storage;
     };
 
+    explicit GuestAddressSpace(NativeArena native) : native_(std::move(native)) {}
     [[nodiscard]] std::map<GuestAddress, Region>::iterator find_region(GuestAddress address);
     [[nodiscard]] std::map<GuestAddress, Region>::const_iterator find_region(GuestAddress address) const;
+    [[nodiscard]] std::optional<GuestSize> native_offset(GuestAddress address) const noexcept;
+
     std::map<GuestAddress, Region> regions_;
+    std::optional<NativeArena> native_;
 };
 
 } // namespace nyxora::memory

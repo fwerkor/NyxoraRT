@@ -1,14 +1,18 @@
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "nyxora/base/types.hpp"
 #include "nyxora/gpu/backend.hpp"
+#include "nyxora/loader/dynamic.hpp"
 #include "nyxora/loader/elf64.hpp"
 #include "nyxora/memory/guest_address_space.hpp"
+#include "nyxora/runtime/linker.hpp"
 #include "nyxora/runtime/symbol_registry.hpp"
 
 namespace nyxora::runtime {
@@ -18,15 +22,24 @@ struct LoadedModule {
     GuestAddress base{};
     GuestAddress entry{};
     std::vector<memory::RegionInfo> segments;
+    std::optional<loader::DynamicInfo> dynamic;
+    std::optional<loader::TlsSegment> tls;
+    std::uint32_t tls_module_id{};
+    RelocationReport relocations;
 };
 
 class Runtime {
 public:
     explicit Runtime(std::unique_ptr<gpu::Backend> gpu_backend);
+    Runtime(std::unique_ptr<gpu::Backend> gpu_backend, memory::GuestAddressSpace memory);
 
     LoadedModule load_elf(const std::filesystem::path& path, GuestAddress base = 0);
+    LoadedModule load_image(const loader::Elf64Image& image, std::filesystem::path path,
+                            GuestAddress base = 0);
+    RelocationReport relink(LoadedModule& module);
 
     [[nodiscard]] memory::GuestAddressSpace& memory() noexcept { return memory_; }
+    [[nodiscard]] const memory::GuestAddressSpace& memory() const noexcept { return memory_; }
     [[nodiscard]] SymbolRegistry& symbols() noexcept { return symbols_; }
     [[nodiscard]] gpu::Backend& gpu() noexcept { return *gpu_; }
 
@@ -34,6 +47,7 @@ private:
     memory::GuestAddressSpace memory_;
     SymbolRegistry symbols_;
     std::unique_ptr<gpu::Backend> gpu_;
+    std::uint32_t next_tls_module_id_{1};
 };
 
 } // namespace nyxora::runtime
