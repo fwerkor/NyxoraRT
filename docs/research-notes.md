@@ -64,3 +64,9 @@ NyxoraRT uses upstream Zydis 4.1.1 (MIT) as the instruction-decoding boundary fo
 ## Windows nonzero TCB side-thunk milestone
 
 Windows x64 can now execute the supported nonzero `FS:[TCB offset]` read forms without mirroring TCB state. Decoded `MOV`, `CMP`, and `XOR` sites jump to a nearby runtime-owned thunk that reads the actual per-thread TCB pointer from the Win32 TLS slot, performs the offset access, and returns to the next guest instruction. The `FS:[0]` case remains an in-place TEB-slot rewrite. This keeps mutable TCB fields single-sourced and makes unsupported operand shapes or patch-arena exhaustion explicit load failures.
+
+## Core libkernel services milestone
+
+The first stateful HLE services now sit behind a runtime-owned `KernelServices` object rather than process-global emulator state. Public reference source was used only to confirm function signatures, NIDs, protection constants, and POSIX-versus-ORBIS error conventions. NyxoraRT independently implements a bounded subset: 16 KiB-aligned guest protection changes, deny-by-default read-only `/app0` file access, and opaque error-checking pthread mutexes. Write-capable mounts, rich mutex attributes, and unimplemented synchronization APIs are left absent instead of registered as no-op success stubs.
+
+Windows HLE execution was strengthened at the same milestone. The entry trampoline records the suspended OS stack in a dedicated inline Win32 TLS slot, and generated SysV-to-MS-x64 HLE bridges switch back to that stack before entering C++ host code. The previous slot value is stored in the entry frame and restored on both ordinary and vectored-exception recovery paths. This keeps filesystem/synchronization implementations away from the guest stack and its incompatible Windows TEB stack bounds.

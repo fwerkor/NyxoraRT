@@ -42,7 +42,7 @@ Unresolved callable imports can now be patched to a stable late-binding thunk. E
 
 ### Native CPU execution
 
-The native-memory path can load and relocate a synthetic SCE image, build a guarded guest stack, switch `RSP`/`RBP`, present the guest SysV argument convention, and return safely to the host. `Runtime::invoke_entry()` composes this with a per-thread runtime context. On Windows x64 the generated entry bridge preserves Microsoft-ABI nonvolatile GPR/XMM state while entering SysV guest code.
+The native-memory path can load and relocate a synthetic SCE image, build a guarded guest stack, switch `RSP`/`RBP`, present the guest SysV argument convention, and return safely to the host. `Runtime::invoke_entry()` composes this with a per-thread runtime context. On Windows x64 the generated entry bridge preserves Microsoft-ABI nonvolatile GPR/XMM state while entering SysV guest code. It also publishes the suspended OS-stack pointer through a dedicated inline TEB TLS slot. Generated HLE bridges preserve the guest stack pointer/nonvolatile state, switch back to that OS stack for the C++ host call (including normal Windows shadow-space/alignment), then return to the guest stack. The entry trampoline restores the previous TLS slot on both normal return and fault recovery, so nested native invocations do not lose the outer host-stack context.
 
 PT_TLS templates are registered per loaded module. Each guest thread receives its own aligned copy of initialized TLS bytes plus zeroed TLS BSS and a 0x40-byte TCB whose DTV uses the guest module identifiers assigned by the linker. Moving a thread context explicitly rebinds the TCB self/DTV pointers so the ABI structure cannot retain stale host addresses.
 
@@ -52,20 +52,27 @@ On Linux x86-64, supported guest FS accesses are rewritten to GS and a scoped se
 
 POSIX x86-64 native execution installs process-level SIGSEGV/SIGBUS/SIGILL handlers once, while Windows x64 installs a vectored exception handler. Capture state is thread-local and only active around native guest invocation. Both paths record the fault address and instruction pointer, rewrite the native exception context to the entry trampoline's saved host stack/recovery epilogue, and return through normal register restoration. POSIX faults outside an active guest invocation are chained to the previous handler; Windows returns `EXCEPTION_CONTINUE_SEARCH`.
 
-`GuestThread` composes an independent guest stack, TLS/TCB context, segment scope, entry trampoline, and captured result on a real host thread. `GuestThreadManager` owns opaque guest thread handles per runtime and propagates both the manager and current handle through a thread-local scope, so `pthread_self` is stable from the first guest instruction and a child can create another thread without a process-global runtime singleton. `pthread_create`, `pthread_join`, `pthread_self`, and `pthread_detach` are registered for both `libkernel` and `libScePosix`; attributes remain limited to the null/default case. Guest detach marks the handle non-joinable but intentionally keeps the host `std::thread` runtime-owned. Finished detached records are reaped lazily, and manager shutdown prevents new creates before joining any remaining workers outside the manager lock. Windows HLE calls use one generated SysV-to-MS-x64 bridge that remaps the first four integer/pointer arguments rather than per-function bridge implementations.
+`GuestThread` composes an independent guest stack, TLS/TCB context, segment scope, entry trampoline, and captured result on a real host thread. `GuestThreadManager` owns opaque guest thread handles per runtime and propagates both the manager/current handle and the runtime-owned `KernelServices` pointer through one thread-local scope, so `pthread_self` is stable from the first guest instruction, HLE services are available inside child guest workers, and a child can create another thread without a process-global runtime singleton. `pthread_create`, `pthread_join`, `pthread_self`, and `pthread_detach` are registered for both `libkernel` and `libScePosix`; attributes remain limited to the null/default case. Guest detach marks the handle non-joinable but intentionally keeps the host `std::thread` runtime-owned. Finished detached records are reaped lazily, and manager shutdown prevents new creates before joining any remaining workers outside the manager lock.
 
 The next native-execution work is:
 
 - multi-page or demand-grown Windows CPU-patch arenas plus rarer TCB operand forms that cannot use the current scratch template;
 - pthread attributes, cancellation basics, and stronger thread-state diagnostics; add `pthread_exit` only after an explicit guest-termination recovery path can return through the native trampoline without C++ unwinding across raw guest/generated frames;
-- Windows host-call stack switching for HLE functions that may probe or consume substantial stack;
 - a narrow fallback mechanism for instructions or behaviors that cannot execute directly.
 
 The CPU layer must not become a general DBT unless evidence shows it is necessary.
 
 ### Initial libkernel HLE
 
-The HLE registry shares the same `SymbolKey` space as guest exports. The first registered `libkernel` functions cover process time, process-time counter/frequency, current-CPU queries, and the initial pthread lifecycle. On SysV x86-64 hosts these bindings can point directly at host implementations. Windows uses a generated guest-SysV-to-host-MS-x64 bridge with shadow-space handling and remaps the first four integer/pointer argument registers; signatures wider than that still need an explicit bridge extension rather than unsafe function-pointer casts.
+The HLE registry shares the same `SymbolKey` space as guest exports. `KernelServices` is runtime-owned rather than global and is reached through the existing guest-thread manager scope. The current slice covers process time/counter/frequency, current CPU, `sceKernelGetDirectMemorySize`, `sceKernelMprotect`, read-only `sceKernelOpen`/`Read`/`Close`, pthread create/join/self/detach, and mutex init/lock/unlock/destroy. POSIX mutex NIDs keep POSIX errno values while the `scePthread*` registrations convert nonzero results to the ORBIS `0x8002xxxx` convention.
+
+`mprotect` uses 16 KiB guest-page alignment and can split one mapped guest region while preserving the unaffected subranges. The current direct-memory-size query reports the configured native guest arena capacity; NyxoraRT does not invent a console hardware constant before a direct/flexible memory allocator exists. A range that crosses separately tracked regions is not yet coalesced by this HLE.
+
+The file slice is intentionally read-only. `/app0` has no implicit host root: an embedding host must configure it, while `Runtime::load_elf()` initializes it from the first executable directory when no root was supplied. Canonical-path checks keep `..` and symlink resolution inside that root, and write/create/truncate/append flags are rejected. Seek/stat and any writable mount policy remain future work.
+
+Mutex objects are opaque guest handles backed by runtime-owned host records. Null/static mutex slots are lazily initialized, ownership is error-checking, and destroy refuses locked/waited objects. Non-null mutex attributes are rejected until recursive/adaptive attribute semantics are modeled; condition variables, semaphores, cancellation, and `pthread_exit` are not stubbed.
+
+On SysV x86-64 hosts HLE bindings can point directly at host implementations. Windows uses the generated bridge described above: it remaps the first four integer/pointer arguments and executes host C++ on the real OS stack. Signatures wider than four integer/pointer arguments still require an explicit bridge extension rather than unsafe casts.
 
 ### GPU
 

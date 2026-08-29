@@ -26,10 +26,11 @@ The initial framework already provides:
 - per-thread PT_TLS images with original alignment, initialized bytes, zeroed TLS BSS, a 0x40-byte guest TCB/DTV model, and scoped runtime thread context;
 - decoded x86-64 TCB patching using pinned Zydis 4.1.1: Linux rewrites supported `FS:[TCB]` accesses to GS; Windows keeps `FS:[0]` as an in-place TEB-slot rewrite and sends supported nonzero `MOV`/`CMP`/`XOR` reads through near side thunks that reload the real TCB pointer; unsupported forms fail loading instead of running with incorrect host TLS semantics;
 - callable late-import thunks backed by immutable RX code and separate RW target/counter slots; unresolved calls are counted and later bindings update stale thunk pointers without rewriting code;
-- a first `libkernel` HLE slice for process-time counters/frequency and current-CPU queries, registered through the same version-aware symbol path as guest exports;
+- a runtime-owned `libkernel` service slice registered through the same version-aware symbol path as guest exports: process-time/current-CPU queries, native-arena size and `mprotect`, deny-by-default read-only `/app0` `open`/`read`/`close`, and pthread mutex init/lock/unlock/destroy with separate POSIX and ORBIS error conventions;
 - `Runtime::invoke_entry()` as a synchronous end-to-end path from a native-backed loaded module through guest stack/thread context to native entry execution;
 - POSIX guest fault capture for SIGSEGV/SIGBUS/SIGILL and Windows x64 vectored-exception recovery, both returning through the native entry recovery epilogue;
-- `GuestThread`/`Runtime::start_thread()` plus a runtime-owned thread manager, with `pthread_create`, `pthread_join`, `pthread_self`, and guest-semantic `pthread_detach` HLE for `libkernel` and `libScePosix`; detached guest threads remain host-owned until completion/shutdown rather than escaping the runtime;
+- `GuestThread`/`Runtime::start_thread()` plus a runtime-owned thread manager, with `pthread_create`, `pthread_join`, `pthread_self`, and guest-semantic `pthread_detach` HLE for `libkernel` and `libScePosix`; the same thread scope carries `KernelServices` into child guest threads, and detached guest threads remain host-owned until completion/shutdown rather than escaping the runtime;
+- a Windows x64 HLE bridge that remaps the first four SysV integer/pointer arguments to MS-x64 and switches C++ host calls back to the suspended OS thread stack instead of running substantial host code on the guest stack;
 - a bounds-checked PM4 packet frontend, GPU submission/timeline interface, and deterministic null backend;
 - unit tests and CI-ready CMake/CTest targets.
 
@@ -47,12 +48,12 @@ To inspect a legal, unencrypted x86-64 ELF test image:
 
 ## Near-term roadmap
 
-1. Grow Windows CPU-patch capacity beyond the current one-page near arena and cover rarer TCB operand forms; add pthread attributes and a dedicated safe guest-thread termination primitive before exposing `pthread_exit`.
-2. Expand `libkernel` HLE into memory, files, synchronization, and sleep/time.
-3. Module lifecycle: dependency loading, init/fini arrays, process parameters, and richer runtime-owned thread tracking.
-4. PM4 command processor with deterministic tracing and state tracking.
-5. Shader frontend -> typed IR -> SPIR-V backend and persistent shader/pipeline cache.
-6. Vulkan resource tracking, synchronization, presentation, and performance tooling.
+1. Add pthread attributes plus a dedicated safe guest-thread termination primitive before exposing `pthread_exit`; then add condition variables/semaphores and sleep APIs.
+2. Extend the file layer with seek/stat and an explicit mount/write policy before enabling any guest file creation or mutation; extend memory HLE with real direct/flexible allocation semantics rather than hardware-size guesses.
+3. Grow Windows CPU-patch capacity beyond the current one-page near arena and cover rarer TCB operand forms.
+4. Module lifecycle: dependency loading, init/fini arrays, process parameters, and richer runtime-owned thread tracking.
+5. PM4 command processor with deterministic tracing and state tracking.
+6. Shader frontend -> typed IR -> SPIR-V backend and persistent shader/pipeline cache, followed by Vulkan resource/synchronization/presentation work.
 
 See [`docs/architecture.md`](docs/architecture.md) and [`docs/research-notes.md`](docs/research-notes.md).
 
