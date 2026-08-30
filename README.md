@@ -26,11 +26,11 @@ The initial framework already provides:
 - per-thread PT_TLS images with original alignment, initialized bytes, zeroed TLS BSS, a 0x40-byte guest TCB/DTV model, and scoped runtime thread context;
 - decoded x86-64 TCB patching using pinned Zydis 4.1.1: Linux rewrites supported `FS:[TCB]` accesses to GS; Windows keeps `FS:[0]` as an in-place TEB-slot rewrite and sends supported nonzero `MOV`/`CMP`/`XOR` reads through near side thunks that reload the real TCB pointer; unsupported forms fail loading instead of running with incorrect host TLS semantics;
 - callable late-import thunks backed by immutable RX code and separate RW target/counter slots; unresolved calls are counted and later bindings update stale thunk pointers without rewriting code;
-- a runtime-owned `libkernel` service slice registered through the same version-aware symbol path as guest exports: process-time/current-CPU queries, native-arena size and `mprotect`, deny-by-default read-only `/app0` `open`/`read`/`close` plus `lseek`/`stat`/`fstat`, typed pthread mutexes, clock-aware condition variables, POSIX/`scePthread` semaphores, sleep/yield calls, and bounded thread/mutex/condition attributes with separate POSIX and ORBIS error conventions;
+- a runtime-owned `libkernel` service slice registered through the same version-aware symbol path as guest exports: process-time/current-CPU queries, native-arena size, `mmap`/`munmap`/`mprotect`, deny-by-default read-only `/app0` `open`/`read`/`close` plus `lseek`/`stat`/`fstat`, typed pthread mutexes, clock-aware condition variables, POSIX/`scePthread` semaphores, sleep/yield calls, and bounded thread/mutex/condition attributes with separate POSIX and ORBIS error conventions;
 - `Runtime::invoke_entry()` as a synchronous end-to-end path from a native-backed loaded module through guest stack/thread context to native entry execution;
 - POSIX guest fault capture for SIGSEGV/SIGBUS/SIGILL and Windows x64 vectored-exception recovery, both returning through the native entry recovery epilogue; the same recovery route provides `pthread_exit` without C++ unwinding or cross-stack `longjmp`;
 - `GuestThread`/`Runtime::start_thread()` plus a runtime-owned thread manager, with `pthread_create`, join/timed-join, `pthread_self`, `pthread_detach`, and `pthread_exit` HLE for `libkernel` and `libScePosix`; timed join uses an absolute realtime deadline without consuming the handle on timeout, stack-size/detach-state attributes are consumed at create time, and detached guest threads remain host-owned until completion/shutdown rather than escaping the runtime;
-- a Windows x64 HLE bridge that remaps the first four SysV integer/pointer arguments to MS-x64 and switches C++ host calls back to the suspended OS thread stack instead of running substantial host code on the guest stack;
+- a Windows x64 HLE bridge that remaps up to seven SysV integer/pointer arguments to MS-x64, including guest stack arguments, and switches C++ host calls back to the suspended OS thread stack instead of running substantial host code on the guest stack;
 - a bounds-checked PM4 packet frontend, GPU submission/timeline interface, and deterministic null backend;
 - unit tests and CI-ready CMake/CTest targets.
 
@@ -48,12 +48,13 @@ To inspect a legal, unencrypted x86-64 ELF test image:
 
 ## Near-term roadmap
 
-1. Build a cancellation-point/interruption layer before registering pthread cancellation or cleanup handlers; then extend synchronization only where lifecycle and scheduler semantics can be represented exactly. Priority-inheritance/protect mutex attributes and the general kernel-semaphore family remain intentionally absent.
-2. Extend the file layer with seek/stat and an explicit mount/write policy before enabling any guest file creation or mutation; extend memory HLE with real direct/flexible allocation semantics rather than hardware-size guesses.
-3. Grow Windows CPU-patch capacity beyond the current one-page near arena and cover rarer TCB operand forms.
-4. Module lifecycle: dependency loading, init/fini arrays, process parameters, and richer runtime-owned thread tracking.
-5. PM4 command processor with deterministic tracing and state tracking.
-6. Shader frontend -> typed IR -> SPIR-V backend and persistent shader/pipeline cache, followed by Vulkan resource/synchronization/presentation work.
+1. Extend virtual-memory compatibility beyond the current anonymous/stack/reserved and read-only private-file `mmap` subset: shared file coherence, system/direct/flexible-memory accounting, and virtual-query APIs remain intentionally unsupported until their state can be modeled.
+2. Build a cancellation-point/interruption layer before registering pthread cancellation or cleanup handlers; then extend synchronization only where lifecycle and scheduler semantics can be represented exactly. Priority-inheritance/protect mutex attributes and the general kernel-semaphore family remain intentionally absent.
+3. Extend the file layer with directory traversal and an explicit mount/write policy before enabling any guest file creation or mutation.
+4. Grow Windows CPU-patch capacity beyond the current one-page near arena and cover rarer TCB operand forms.
+5. Module lifecycle: dependency loading, init/fini arrays, process parameters, and richer runtime-owned thread tracking.
+6. PM4 command processor with deterministic tracing and state tracking.
+7. Shader frontend -> typed IR -> SPIR-V backend and persistent shader/pipeline cache, followed by Vulkan resource/synchronization/presentation work.
 
 See [`docs/architecture.md`](docs/architecture.md) and [`docs/research-notes.md`](docs/research-notes.md).
 
