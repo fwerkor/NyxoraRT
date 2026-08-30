@@ -163,7 +163,10 @@ HleRegistry::~HleRegistry() = default;
 
 HleRegistry::HleRegistry(SymbolRegistry& symbols) : symbols_(symbols) {
 #if defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
-    bridges_ = BridgeTable::create(128);
+    auto bridge = BridgeTable::create(kBridgeChunkCapacity);
+    if (bridge) {
+        bridges_.push_back(std::move(bridge));
+    }
 #endif
 }
 
@@ -174,12 +177,20 @@ bool HleRegistry::register_function(SymbolKey key, GuestAddress function, std::s
 
     GuestAddress address{};
 #if defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
-    if (!bridges_) {
+    if (bridges_.empty()) {
         return false;
     }
-    const auto bridge = bridges_->add(function);
+    auto bridge = bridges_.back()->add(function);
     if (!bridge) {
-        return false;
+        auto next = BridgeTable::create(kBridgeChunkCapacity);
+        if (!next) {
+            return false;
+        }
+        bridge = next->add(function);
+        if (!bridge) {
+            return false;
+        }
+        bridges_.push_back(std::move(next));
     }
     address = *bridge;
 #elif defined(__x86_64__)

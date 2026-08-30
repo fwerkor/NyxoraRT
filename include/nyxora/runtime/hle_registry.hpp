@@ -5,6 +5,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "nyxora/base/types.hpp"
 #include "nyxora/memory/native_arena.hpp"
@@ -24,10 +25,11 @@ public:
     [[nodiscard]] std::size_t size() const noexcept { return registered_; }
 
 private:
+    static constexpr std::size_t kBridgeChunkCapacity = 128;
     class BridgeTable;
 
     SymbolRegistry& symbols_;
-    std::unique_ptr<BridgeTable> bridges_;
+    std::vector<std::unique_ptr<BridgeTable>> bridges_;
     std::size_t registered_{};
 };
 

@@ -1442,3 +1442,17 @@ NYXORA_TEST(libkernel_mutex_attribute_hle_keeps_posix_and_orbis_error_convention
     NYXORA_CHECK(static_cast<std::uint32_t>(encoded) == 0x80020016U);
 #endif
 }
+
+NYXORA_TEST(hle_registry_grows_beyond_one_windows_bridge_chunk) {
+#if defined(__x86_64__) || defined(_M_X64)
+    nyxora::runtime::SymbolRegistry symbols;
+    nyxora::runtime::HleRegistry hle(symbols);
+    constexpr std::size_t binding_count = 160;
+    for (std::size_t index = 0; index < binding_count; ++index) {
+        auto key = no_arg_test_key();
+        key.nid = "bridge-capacity-" + std::to_string(index);
+        NYXORA_CHECK(hle.register_no_arg(std::move(key), &returns_123, "bridge-capacity"));
+    }
+    NYXORA_CHECK(hle.size() == binding_count);
+#endif
+}
