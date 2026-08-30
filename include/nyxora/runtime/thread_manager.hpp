@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -18,8 +19,11 @@ class KernelServices;
 class GuestThreadManager {
 public:
     static constexpr int kPosixEsrch = 3;
+    static constexpr int kPosixEdeadlk = 11;
     static constexpr int kPosixEinval = 22;
     static constexpr int kPosixEagain = 35;
+    static constexpr int kPosixEnotsup = 45;
+    static constexpr int kPosixEtimedout = 60;
 
     explicit GuestThreadManager(const TlsRegistry& tls_registry, KernelServices* kernel_services = nullptr)
         : tls_registry_(tls_registry), kernel_services_(kernel_services) {}
@@ -31,6 +35,8 @@ public:
     int create(GuestAddress* handle_out, GuestAddress attributes, GuestAddress start_routine,
                GuestAddress argument, GuestSize stack_size = 1024 * 1024);
     int join(GuestAddress handle, GuestAddress* return_value);
+    int timed_join(GuestAddress handle, GuestAddress* return_value,
+                   GuestAddress absolute_timeout_address);
     int detach(GuestAddress handle);
 
     [[nodiscard]] std::size_t size();
@@ -48,8 +54,11 @@ private:
     struct Record {
         std::optional<GuestThread> thread;
         bool detached{};
+        bool join_claimed{};
     };
 
+    int join_impl(GuestAddress handle, GuestAddress* return_value,
+                  std::optional<std::chrono::system_clock::time_point> deadline);
     void reap_finished_detached_locked();
 
     const TlsRegistry& tls_registry_;

@@ -52,10 +52,23 @@ std::optional<GuestThread> GuestThread::start(const TlsRegistry& tls_registry,
         } catch (...) {
             raw_state->host_exception = std::current_exception();
         }
-        raw_state->finished.store(true, std::memory_order_release);
+        {
+            std::scoped_lock completion_lock(raw_state->completion_mutex);
+            raw_state->finished.store(true, std::memory_order_release);
+        }
+        raw_state->completion_condition.notify_all();
     });
 
     return GuestThread(std::move(state), std::move(worker));
+}
+
+bool GuestThread::wait_until(std::chrono::system_clock::time_point deadline) const {
+    if (state_ == nullptr) {
+        return false;
+    }
+    std::unique_lock lock(state_->completion_mutex);
+    return state_->completion_condition.wait_until(
+        lock, deadline, [&] { return state_->finished.load(std::memory_order_acquire); });
 }
 
 GuestInvocationResult GuestThread::join() {

@@ -111,6 +111,76 @@ std::uint64_t kernel_close(std::uint64_t fd) {
     return signed_result(services->close(static_cast<int>(static_cast<std::int32_t>(fd))));
 }
 
+std::uint64_t mutex_attr_init(std::uint64_t attribute) {
+    auto* services = kernel_services();
+    return services == nullptr ? runtime::KernelServices::kPosixEinval
+                               : static_cast<std::uint64_t>(services->mutex_attr_init(
+                                     static_cast<GuestAddress>(attribute)));
+}
+
+std::uint64_t mutex_attr_destroy(std::uint64_t attribute) {
+    auto* services = kernel_services();
+    return services == nullptr ? runtime::KernelServices::kPosixEinval
+                               : static_cast<std::uint64_t>(services->mutex_attr_destroy(
+                                     static_cast<GuestAddress>(attribute)));
+}
+
+std::uint64_t mutex_attr_get_type(std::uint64_t attribute, std::uint64_t output) {
+    auto* services = kernel_services();
+    return services == nullptr ? runtime::KernelServices::kPosixEinval
+                               : static_cast<std::uint64_t>(services->mutex_attr_get_type(
+                                     static_cast<GuestAddress>(attribute),
+                                     static_cast<GuestAddress>(output)));
+}
+
+std::uint64_t mutex_attr_set_type(std::uint64_t attribute, std::uint64_t type) {
+    auto* services = kernel_services();
+    return services == nullptr ? runtime::KernelServices::kPosixEinval
+                               : static_cast<std::uint64_t>(services->mutex_attr_set_type(
+                                     static_cast<GuestAddress>(attribute),
+                                     static_cast<std::uint32_t>(type)));
+}
+
+std::uint64_t mutex_attr_get_pshared(std::uint64_t attribute, std::uint64_t output) {
+    auto* services = kernel_services();
+    return services == nullptr ? runtime::KernelServices::kPosixEinval
+                               : static_cast<std::uint64_t>(services->mutex_attr_get_pshared(
+                                     static_cast<GuestAddress>(attribute),
+                                     static_cast<GuestAddress>(output)));
+}
+
+std::uint64_t mutex_attr_set_pshared(std::uint64_t attribute, std::uint64_t pshared) {
+    auto* services = kernel_services();
+    return services == nullptr ? runtime::KernelServices::kPosixEinval
+                               : static_cast<std::uint64_t>(services->mutex_attr_set_pshared(
+                                     static_cast<GuestAddress>(attribute),
+                                     static_cast<int>(pshared)));
+}
+
+std::uint64_t orbis_mutex_attr_init(std::uint64_t attribute) {
+    return orbis_errno_result(static_cast<int>(mutex_attr_init(attribute)));
+}
+
+std::uint64_t orbis_mutex_attr_destroy(std::uint64_t attribute) {
+    return orbis_errno_result(static_cast<int>(mutex_attr_destroy(attribute)));
+}
+
+std::uint64_t orbis_mutex_attr_get_type(std::uint64_t attribute, std::uint64_t output) {
+    return orbis_errno_result(static_cast<int>(mutex_attr_get_type(attribute, output)));
+}
+
+std::uint64_t orbis_mutex_attr_set_type(std::uint64_t attribute, std::uint64_t type) {
+    return orbis_errno_result(static_cast<int>(mutex_attr_set_type(attribute, type)));
+}
+
+std::uint64_t orbis_mutex_attr_get_pshared(std::uint64_t attribute, std::uint64_t output) {
+    return orbis_errno_result(static_cast<int>(mutex_attr_get_pshared(attribute, output)));
+}
+
+std::uint64_t orbis_mutex_attr_set_pshared(std::uint64_t attribute, std::uint64_t pshared) {
+    return orbis_errno_result(static_cast<int>(mutex_attr_set_pshared(attribute, pshared)));
+}
+
 std::uint64_t posix_mutex_init(std::uint64_t mutex, std::uint64_t attributes) {
     auto* services = kernel_services();
     return services == nullptr ? runtime::KernelServices::kPosixEinval
@@ -514,6 +584,18 @@ std::uint64_t pthread_join(std::uint64_t thread, std::uint64_t return_value) {
         return_value == 0 ? nullptr : reinterpret_cast<GuestAddress*>(return_value)));
 }
 
+std::uint64_t pthread_timed_join(std::uint64_t thread, std::uint64_t return_value,
+                                 std::uint64_t absolute_timeout) {
+    auto* manager = runtime::GuestThreadManager::current();
+    if (manager == nullptr) {
+        return runtime::GuestThreadManager::kPosixEinval;
+    }
+    return static_cast<std::uint64_t>(manager->timed_join(
+        static_cast<GuestAddress>(thread),
+        return_value == 0 ? nullptr : reinterpret_cast<GuestAddress*>(return_value),
+        static_cast<GuestAddress>(absolute_timeout)));
+}
+
 std::uint64_t pthread_self() {
     return static_cast<std::uint64_t>(runtime::GuestThreadManager::current_handle());
 }
@@ -713,6 +795,7 @@ void register_core(runtime::HleRegistry& registry) {
 
     const auto create_address = reinterpret_cast<GuestAddress>(&pthread_create);
     const auto join_address = reinterpret_cast<GuestAddress>(&pthread_join);
+    const auto timed_join_address = reinterpret_cast<GuestAddress>(&pthread_timed_join);
     const auto self_address = reinterpret_cast<GuestAddress>(&pthread_self);
     const auto detach_address = reinterpret_cast<GuestAddress>(&pthread_detach);
     const auto exit_address = reinterpret_cast<GuestAddress>(&pthread_exit);
@@ -721,6 +804,8 @@ void register_core(runtime::HleRegistry& registry) {
                                          "pthread_create");
         (void)registry.register_function(key("h9CcP3J0oVM", library), join_address,
                                          "pthread_join");
+        (void)registry.register_function(key("PkS44IGrDkM", library), timed_join_address,
+                                         "pthread_timedjoin_np");
         (void)registry.register_function(key("EotR8a3ASf4", library), self_address,
                                          "pthread_self");
         (void)registry.register_function(key("+U1R4WtXvoc", library), detach_address,
@@ -770,6 +855,50 @@ void register_core(runtime::HleRegistry& registry) {
     (void)registry.register_function(key("-Wreprtu0Qs"),
                                      reinterpret_cast<GuestAddress>(&orbis_attr_set_detach_state),
                                      "scePthreadAttrSetdetachstate");
+
+    const auto mutex_attr_init_address = reinterpret_cast<GuestAddress>(&mutex_attr_init);
+    const auto mutex_attr_destroy_address = reinterpret_cast<GuestAddress>(&mutex_attr_destroy);
+    const auto mutex_attr_get_type_address = reinterpret_cast<GuestAddress>(&mutex_attr_get_type);
+    const auto mutex_attr_set_type_address = reinterpret_cast<GuestAddress>(&mutex_attr_set_type);
+    const auto mutex_attr_get_pshared_address =
+        reinterpret_cast<GuestAddress>(&mutex_attr_get_pshared);
+    const auto mutex_attr_set_pshared_address =
+        reinterpret_cast<GuestAddress>(&mutex_attr_set_pshared);
+    for (const char* library : {"libkernel", "libScePosix"}) {
+        (void)registry.register_function(key("dQHWEsJtoE4", library), mutex_attr_init_address,
+                                         "pthread_mutexattr_init");
+        (void)registry.register_function(key("HF7lK46xzjY", library), mutex_attr_destroy_address,
+                                         "pthread_mutexattr_destroy");
+        (void)registry.register_function(key("GZFlI7RhuQo", library), mutex_attr_get_type_address,
+                                         "pthread_mutexattr_gettype");
+        (void)registry.register_function(key("mDmgMOGVUqg", library), mutex_attr_set_type_address,
+                                         "pthread_mutexattr_settype");
+        (void)registry.register_function(key("PmL-TwKUzXI", library), mutex_attr_get_pshared_address,
+                                         "pthread_mutexattr_getpshared");
+        (void)registry.register_function(key("EXv3ztGqtDM", library), mutex_attr_set_pshared_address,
+                                         "pthread_mutexattr_setpshared");
+    }
+    (void)registry.register_function(key("n2MMpvU8igI"),
+                                     reinterpret_cast<GuestAddress>(&orbis_mutex_attr_init),
+                                     "scePthreadMutexattrInit");
+    (void)registry.register_function(key("F8bUHwAG284"),
+                                     reinterpret_cast<GuestAddress>(&orbis_mutex_attr_init),
+                                     "scePthreadMutexattrInit");
+    (void)registry.register_function(key("smWEktiyyG0"),
+                                     reinterpret_cast<GuestAddress>(&orbis_mutex_attr_destroy),
+                                     "scePthreadMutexattrDestroy");
+    (void)registry.register_function(key("gquEhBrS2iw"),
+                                     reinterpret_cast<GuestAddress>(&orbis_mutex_attr_get_type),
+                                     "scePthreadMutexattrGettype");
+    (void)registry.register_function(key("iMp8QpE+XO4"),
+                                     reinterpret_cast<GuestAddress>(&orbis_mutex_attr_set_type),
+                                     "scePthreadMutexattrSettype");
+    (void)registry.register_function(key("losEubHc64c"),
+                                     reinterpret_cast<GuestAddress>(&orbis_mutex_attr_get_pshared),
+                                     "scePthreadMutexattrGetpshared");
+    (void)registry.register_function(key("mxKx9bxXF2I"),
+                                     reinterpret_cast<GuestAddress>(&orbis_mutex_attr_set_pshared),
+                                     "scePthreadMutexattrSetpshared");
 
     (void)registry.register_function(key("cmo1RIYva9o"),
                                      reinterpret_cast<GuestAddress>(&sce_mutex_init),

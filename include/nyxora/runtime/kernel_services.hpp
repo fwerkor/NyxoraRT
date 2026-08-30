@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -66,6 +67,18 @@ public:
     [[nodiscard]] int thread_attr_snapshot(GuestAddress slot_address,
                                            ThreadAttributes& attributes) const;
 
+    static constexpr std::uint32_t kMutexTypeErrorCheck = 1;
+    static constexpr std::uint32_t kMutexTypeRecursive = 2;
+    static constexpr std::uint32_t kMutexTypeNormal = 3;
+    static constexpr std::uint32_t kMutexTypeAdaptive = 4;
+
+    [[nodiscard]] int mutex_attr_init(GuestAddress slot_address);
+    [[nodiscard]] int mutex_attr_destroy(GuestAddress slot_address);
+    [[nodiscard]] int mutex_attr_get_type(GuestAddress slot_address, GuestAddress output_address);
+    [[nodiscard]] int mutex_attr_set_type(GuestAddress slot_address, std::uint32_t type);
+    [[nodiscard]] int mutex_attr_get_pshared(GuestAddress slot_address, GuestAddress output_address);
+    [[nodiscard]] int mutex_attr_set_pshared(GuestAddress slot_address, int pshared);
+
     [[nodiscard]] int mutex_init(GuestAddress slot_address, GuestAddress attributes,
                                  GuestAddress name_address);
     [[nodiscard]] int mutex_lock(GuestAddress slot_address);
@@ -101,6 +114,8 @@ public:
     [[nodiscard]] int sem_get_value(GuestAddress slot_address, GuestAddress output_address);
 
     [[nodiscard]] int nanosleep(GuestAddress request_address, GuestAddress remaining_address);
+    [[nodiscard]] int realtime_deadline(
+        GuestAddress timespec_address, std::chrono::system_clock::time_point& deadline) const;
 
 private:
     struct FileRecord {
@@ -109,12 +124,19 @@ private:
         std::ifstream file;
     };
 
+    struct MutexAttributes {
+        std::uint32_t type{kMutexTypeErrorCheck};
+        int pshared{};
+    };
+
     struct MutexRecord {
         std::mutex mutex;
         std::condition_variable condition;
         bool locked{};
         std::thread::id owner;
+        std::size_t recursion_depth{};
         std::size_t waiters{};
+        std::uint32_t type{kMutexTypeErrorCheck};
     };
 
     struct CondWaiter {
@@ -168,6 +190,8 @@ private:
     [[nodiscard]] bool guest_writable(GuestAddress address, GuestSize size) const noexcept;
     [[nodiscard]] std::filesystem::path resolve_guest_path(const std::string& guest_path,
                                                            bool& allowed) const;
+    [[nodiscard]] int mutex_attr_snapshot(GuestAddress slot_address, MutexAttributes& attributes) const;
+    [[nodiscard]] std::uint64_t allocate_mutex_attr_handle_locked();
     [[nodiscard]] std::shared_ptr<MutexRecord> mutex_for_slot_locked(GuestAddress slot_address,
                                                                      bool create_static,
                                                                      int& error_out);
@@ -199,6 +223,10 @@ private:
     mutable std::mutex thread_attrs_mutex_;
     std::uint64_t next_thread_attr_handle_{0x20000};
     std::unordered_map<std::uint64_t, ThreadAttributes> thread_attrs_;
+
+    mutable std::mutex mutex_attrs_mutex_;
+    std::uint64_t next_mutex_attr_handle_{0x60000};
+    std::unordered_map<std::uint64_t, MutexAttributes> mutex_attrs_;
 
     mutable std::mutex mutexes_mutex_;
     std::uint64_t next_mutex_handle_{0x10000};

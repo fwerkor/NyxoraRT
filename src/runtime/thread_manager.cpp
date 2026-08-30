@@ -85,14 +85,39 @@ int GuestThreadManager::create(GuestAddress* handle_out, GuestAddress attributes
 }
 
 int GuestThreadManager::join(GuestAddress handle, GuestAddress* return_value) {
+    return join_impl(handle, return_value, std::nullopt);
+}
+
+int GuestThreadManager::timed_join(GuestAddress handle, GuestAddress* return_value,
+                                   GuestAddress absolute_timeout_address) {
+    if (kernel_services_ == nullptr) {
+        return kPosixEinval;
+    }
+    std::chrono::system_clock::time_point deadline;
+    const auto deadline_result =
+        kernel_services_->realtime_deadline(absolute_timeout_address, deadline);
+    if (deadline_result != 0) {
+        return deadline_result;
+    }
+    return join_impl(handle, return_value, deadline);
+}
+
+int GuestThreadManager::join_impl(
+    GuestAddress handle, GuestAddress* return_value,
+    std::optional<std::chrono::system_clock::time_point> deadline) {
     if (handle == 0) {
-        return kPosixEsrch;
+        return kPosixEinval;
+    }
+    const auto current = current_handle();
+    if (current != 0 && handle == current) {
+        return kPosixEdeadlk;
     }
     if (handle == root_handle()) {
         return kPosixEinval;
     }
 
-    std::unique_ptr<Record> record;
+    Record* claimed_record = nullptr;
+    GuestThread* thread = nullptr;
     {
         std::scoped_lock lock(mutex_);
         const auto it = threads_.find(handle);
@@ -102,21 +127,49 @@ int GuestThreadManager::join(GuestAddress handle, GuestAddress* return_value) {
         if (it->second->detached) {
             return kPosixEinval;
         }
-        record = std::move(it->second);
-        threads_.erase(it);
+        if (it->second->join_claimed) {
+            return kPosixEnotsup;
+        }
+        if (!it->second->thread) {
+            return kPosixEinval;
+        }
+        it->second->join_claimed = true;
+        claimed_record = it->second.get();
+        thread = &*it->second->thread;
     }
 
-    if (!record->thread) {
-        return kPosixEinval;
+    if (deadline && !thread->wait_until(*deadline)) {
+        std::scoped_lock lock(mutex_);
+        const auto it = threads_.find(handle);
+        if (it != threads_.end() && it->second.get() == claimed_record) {
+            it->second->join_claimed = false;
+        }
+        return kPosixEtimedout;
     }
 
     GuestInvocationResult result;
     try {
-        result = record->thread->join();
-    } catch (const std::exception&) {
-        // C++ exceptions must not unwind through a generated guest ABI frame.
+        result = thread->join();
+    } catch (...) {
+        // Host exceptions must never unwind through an HLE call frame. Guest-visible thread
+        // failures are reported through the pthread error convention instead.
+        std::scoped_lock lock(mutex_);
+        const auto it = threads_.find(handle);
+        if (it != threads_.end() && it->second.get() == claimed_record) {
+            threads_.erase(it);
+        }
         return kPosixEinval;
     }
+
+    {
+        std::scoped_lock lock(mutex_);
+        const auto it = threads_.find(handle);
+        if (it == threads_.end() || it->second.get() != claimed_record) {
+            return kPosixEsrch;
+        }
+        threads_.erase(it);
+    }
+
     if (!result.completed()) {
         return kPosixEinval;
     }
@@ -139,7 +192,7 @@ int GuestThreadManager::detach(GuestAddress handle) {
     if (it == threads_.end()) {
         return kPosixEsrch;
     }
-    if (it->second->detached) {
+    if (it->second->detached || it->second->join_claimed) {
         return kPosixEinval;
     }
     it->second->detached = true;

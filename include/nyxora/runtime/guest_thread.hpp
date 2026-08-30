@@ -1,9 +1,12 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <exception>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <thread>
 
@@ -35,6 +38,7 @@ public:
     [[nodiscard]] bool finished() const noexcept {
         return state_ != nullptr && state_->finished.load(std::memory_order_acquire);
     }
+    [[nodiscard]] bool wait_until(std::chrono::system_clock::time_point deadline) const;
     GuestInvocationResult join();
 
 private:
@@ -48,6 +52,8 @@ private:
         GuestThreadContext context;
         GuestInvocationResult result;
         std::exception_ptr host_exception;
+        mutable std::mutex completion_mutex;
+        mutable std::condition_variable completion_condition;
         std::atomic<bool> finished{false};
     };
 

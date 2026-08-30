@@ -88,7 +88,7 @@ NYXORA_TEST(libkernel_core_registers_process_time_and_cpu_hle) {
     nyxora::runtime::SymbolRegistry symbols;
     nyxora::runtime::HleRegistry hle(symbols);
     nyxora::hle::libkernel::register_core(hle);
-    NYXORA_CHECK(hle.size() == 127);
+    NYXORA_CHECK(hle.size() == 148);
 
     const auto frequency = symbols.resolve(libkernel_key("BNowx2l588E"));
     const auto cpu = symbols.resolve(libkernel_key("g0VTBxfJyu0"));
@@ -1330,4 +1330,115 @@ NYXORA_TEST(libkernel_semaphore_destroy_cannot_remove_a_published_waiter) {
         }
     }
     NYXORA_CHECK(observed_busy);
+}
+
+
+NYXORA_TEST(libkernel_mutex_attributes_drive_recursive_mutex_semantics) {
+    nyxora::memory::GuestAddressSpace memory;
+    constexpr nyxora::GuestAddress base = 0x140000;
+    constexpr nyxora::GuestAddress attr_slot = base;
+    constexpr nyxora::GuestAddress type_out = base + 0x20;
+    constexpr nyxora::GuestAddress pshared_out = base + 0x30;
+    constexpr nyxora::GuestAddress mutex_slot = base + 0x40;
+    NYXORA_CHECK(memory.map(base, 0x1000,
+                            nyxora::memory::Protection::read |
+                                nyxora::memory::Protection::write,
+                            "mutex-attrs"));
+    NYXORA_CHECK(memory.zero(base, 0x1000));
+    nyxora::runtime::KernelServices services(memory);
+
+    NYXORA_CHECK(services.mutex_attr_init(attr_slot) == 0);
+    NYXORA_CHECK(services.mutex_attr_get_type(attr_slot, type_out) == 0);
+    std::uint32_t type = 0;
+    auto bytes = memory.view(type_out, sizeof(type));
+    std::memcpy(&type, bytes.data(), sizeof(type));
+    NYXORA_CHECK(type == nyxora::runtime::KernelServices::kMutexTypeErrorCheck);
+    NYXORA_CHECK(services.mutex_attr_get_pshared(attr_slot, pshared_out) == 0);
+    std::uint32_t pshared = 99;
+    bytes = memory.view(pshared_out, sizeof(pshared));
+    std::memcpy(&pshared, bytes.data(), sizeof(pshared));
+    NYXORA_CHECK(pshared == 0);
+    NYXORA_CHECK(services.mutex_attr_set_type(attr_slot, 0) ==
+                 nyxora::runtime::KernelServices::kPosixEinval);
+    NYXORA_CHECK(services.mutex_attr_set_type(attr_slot, 5) ==
+                 nyxora::runtime::KernelServices::kPosixEinval);
+    NYXORA_CHECK(services.mutex_attr_set_pshared(attr_slot, 1) ==
+                 nyxora::runtime::KernelServices::kPosixEinval);
+    NYXORA_CHECK(services.mutex_attr_set_type(
+                     attr_slot, nyxora::runtime::KernelServices::kMutexTypeRecursive) == 0);
+
+    NYXORA_CHECK(services.mutex_init(mutex_slot, attr_slot, 0) == 0);
+    NYXORA_CHECK(services.mutex_lock(mutex_slot) == 0);
+    NYXORA_CHECK(services.mutex_lock(mutex_slot) == 0);
+    NYXORA_CHECK(services.mutex_unlock(mutex_slot) == 0);
+    NYXORA_CHECK(services.mutex_destroy(mutex_slot) ==
+                 nyxora::runtime::KernelServices::kPosixEbusy);
+    NYXORA_CHECK(services.mutex_unlock(mutex_slot) == 0);
+    NYXORA_CHECK(services.mutex_destroy(mutex_slot) == 0);
+    NYXORA_CHECK(services.mutex_attr_destroy(attr_slot) == 0);
+}
+
+NYXORA_TEST(libkernel_condition_wait_restores_recursive_mutex_depth) {
+    nyxora::memory::GuestAddressSpace memory;
+    constexpr nyxora::GuestAddress base = 0x150000;
+    constexpr nyxora::GuestAddress attr_slot = base;
+    constexpr nyxora::GuestAddress mutex_slot = base + 0x20;
+    constexpr nyxora::GuestAddress cond_slot = base + 0x40;
+    NYXORA_CHECK(memory.map(base, 0x1000,
+                            nyxora::memory::Protection::read |
+                                nyxora::memory::Protection::write,
+                            "recursive-cond"));
+    NYXORA_CHECK(memory.zero(base, 0x1000));
+    nyxora::runtime::KernelServices services(memory);
+    NYXORA_CHECK(services.mutex_attr_init(attr_slot) == 0);
+    NYXORA_CHECK(services.mutex_attr_set_type(
+                     attr_slot, nyxora::runtime::KernelServices::kMutexTypeRecursive) == 0);
+    NYXORA_CHECK(services.mutex_init(mutex_slot, attr_slot, 0) == 0);
+    NYXORA_CHECK(services.cond_init(cond_slot, 0) == 0);
+    NYXORA_CHECK(services.mutex_lock(mutex_slot) == 0);
+    NYXORA_CHECK(services.mutex_lock(mutex_slot) == 0);
+    NYXORA_CHECK(services.cond_reltimed_wait(cond_slot, mutex_slot, 0) ==
+                 nyxora::runtime::KernelServices::kPosixEtimedout);
+    NYXORA_CHECK(services.mutex_unlock(mutex_slot) == 0);
+    NYXORA_CHECK(services.mutex_destroy(mutex_slot) ==
+                 nyxora::runtime::KernelServices::kPosixEbusy);
+    NYXORA_CHECK(services.mutex_unlock(mutex_slot) == 0);
+    NYXORA_CHECK(services.mutex_destroy(mutex_slot) == 0);
+    NYXORA_CHECK(services.cond_destroy(cond_slot) == 0);
+    NYXORA_CHECK(services.mutex_attr_destroy(attr_slot) == 0);
+}
+
+NYXORA_TEST(libkernel_mutex_attribute_hle_keeps_posix_and_orbis_error_conventions) {
+#if defined(__x86_64__) || defined(_M_X64)
+    nyxora::memory::GuestAddressSpace memory;
+    constexpr nyxora::GuestAddress base = 0x160000;
+    constexpr nyxora::GuestAddress attr_slot = base;
+    NYXORA_CHECK(memory.map(base, 0x1000,
+                            nyxora::memory::Protection::read |
+                                nyxora::memory::Protection::write,
+                            "mutex-attr-hle"));
+    NYXORA_CHECK(memory.zero(base, 0x1000));
+    nyxora::runtime::KernelServices services(memory);
+    nyxora::runtime::TlsRegistry tls;
+    nyxora::runtime::GuestThreadManager manager(tls, &services);
+    nyxora::runtime::SymbolRegistry symbols;
+    nyxora::runtime::HleRegistry hle(symbols);
+    nyxora::hle::libkernel::register_core(hle);
+    const auto init = symbols.resolve(libkernel_key("dQHWEsJtoE4"));
+    const auto posix_settype = symbols.resolve(libkernel_key("mDmgMOGVUqg"));
+    const auto orbis_settype = symbols.resolve(libkernel_key("iMp8QpE+XO4"));
+    NYXORA_CHECK(init.has_value());
+    NYXORA_CHECK(posix_settype.has_value());
+    NYXORA_CHECK(orbis_settype.has_value());
+    auto stack = nyxora::runtime::GuestStack::create(64 * 1024);
+    auto trampoline = nyxora::runtime::EntryTrampoline::create();
+    NYXORA_CHECK(stack.has_value());
+    NYXORA_CHECK(trampoline.has_value());
+    nyxora::runtime::ScopedGuestThreadManager scope(manager);
+    NYXORA_CHECK(trampoline->invoke(init->address, stack->top(), attr_slot) == 0);
+    NYXORA_CHECK(trampoline->invoke(posix_settype->address, stack->top(), attr_slot, 5) ==
+                 nyxora::runtime::KernelServices::kPosixEinval);
+    const auto encoded = trampoline->invoke(orbis_settype->address, stack->top(), attr_slot, 5);
+    NYXORA_CHECK(static_cast<std::uint32_t>(encoded) == 0x80020016U);
+#endif
 }

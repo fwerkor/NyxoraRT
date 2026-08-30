@@ -37,6 +37,11 @@ constexpr std::uint32_t kClockVirtual = 1;
 constexpr std::uint32_t kClockProf = 2;
 constexpr std::uint32_t kClockMonotonic = 4;
 
+bool supported_mutex_type(std::uint32_t type) noexcept {
+    return type >= KernelServices::kMutexTypeErrorCheck &&
+           type <= KernelServices::kMutexTypeAdaptive;
+}
+
 bool supported_cond_clock(std::uint32_t clock_id) noexcept {
     return clock_id == kClockRealtime || clock_id == kClockVirtual || clock_id == kClockProf ||
            clock_id == kClockMonotonic;
@@ -544,6 +549,132 @@ int KernelServices::thread_attr_set_detach_state(GuestAddress slot_address, int 
     return 0;
 }
 
+std::uint64_t KernelServices::allocate_mutex_attr_handle_locked() {
+    while (next_mutex_attr_handle_ == 0 || mutex_attrs_.contains(next_mutex_attr_handle_)) {
+        next_mutex_attr_handle_ += 8;
+        if (next_mutex_attr_handle_ < 0x60000) {
+            next_mutex_attr_handle_ = 0x60000;
+        }
+    }
+    const auto result = next_mutex_attr_handle_;
+    next_mutex_attr_handle_ += 8;
+    return result;
+}
+
+int KernelServices::mutex_attr_init(GuestAddress slot_address) {
+    if (slot_address == 0 || !guest_writable(slot_address, sizeof(std::uint64_t))) {
+        return kPosixEinval;
+    }
+    std::scoped_lock lock(mutex_attrs_mutex_);
+    const auto handle = allocate_mutex_attr_handle_locked();
+    try {
+        mutex_attrs_.emplace(handle, MutexAttributes{});
+    } catch (const std::bad_alloc&) {
+        return kPosixEnomem;
+    }
+    if (!write_guest_u64(slot_address, handle)) {
+        mutex_attrs_.erase(handle);
+        return kPosixEinval;
+    }
+    return 0;
+}
+
+int KernelServices::mutex_attr_destroy(GuestAddress slot_address) {
+    if (slot_address == 0 || !guest_writable(slot_address, sizeof(std::uint64_t))) {
+        return kPosixEinval;
+    }
+    std::scoped_lock lock(mutex_attrs_mutex_);
+    std::uint64_t handle = 0;
+    if (!read_guest_u64(slot_address, handle)) {
+        return kPosixEinval;
+    }
+    const auto it = mutex_attrs_.find(handle);
+    if (it == mutex_attrs_.end()) {
+        return kPosixEinval;
+    }
+    if (!write_guest_u64(slot_address, 0)) {
+        return kPosixEinval;
+    }
+    mutex_attrs_.erase(it);
+    return 0;
+}
+
+int KernelServices::mutex_attr_snapshot(GuestAddress slot_address, MutexAttributes& attributes) const {
+    if (slot_address == 0) {
+        return kPosixEinval;
+    }
+    std::scoped_lock lock(mutex_attrs_mutex_);
+    std::uint64_t handle = 0;
+    if (!read_guest_u64(slot_address, handle)) {
+        return kPosixEinval;
+    }
+    const auto it = mutex_attrs_.find(handle);
+    if (it == mutex_attrs_.end()) {
+        return kPosixEinval;
+    }
+    attributes = it->second;
+    return 0;
+}
+
+int KernelServices::mutex_attr_get_type(GuestAddress slot_address, GuestAddress output_address) {
+    if (!guest_writable(output_address, sizeof(std::uint32_t))) {
+        return kPosixEinval;
+    }
+    MutexAttributes attributes;
+    const auto result = mutex_attr_snapshot(slot_address, attributes);
+    if (result != 0) {
+        return result;
+    }
+    return write_guest_u32(output_address, attributes.type) ? 0 : kPosixEinval;
+}
+
+int KernelServices::mutex_attr_set_type(GuestAddress slot_address, std::uint32_t type) {
+    if (!supported_mutex_type(type)) {
+        return kPosixEinval;
+    }
+    std::scoped_lock lock(mutex_attrs_mutex_);
+    std::uint64_t handle = 0;
+    if (!read_guest_u64(slot_address, handle)) {
+        return kPosixEinval;
+    }
+    const auto it = mutex_attrs_.find(handle);
+    if (it == mutex_attrs_.end()) {
+        return kPosixEinval;
+    }
+    it->second.type = type;
+    return 0;
+}
+
+int KernelServices::mutex_attr_get_pshared(GuestAddress slot_address, GuestAddress output_address) {
+    if (!guest_writable(output_address, sizeof(std::uint32_t))) {
+        return kPosixEinval;
+    }
+    MutexAttributes attributes;
+    const auto result = mutex_attr_snapshot(slot_address, attributes);
+    if (result != 0) {
+        return result;
+    }
+    return write_guest_u32(output_address, static_cast<std::uint32_t>(attributes.pshared)) ? 0
+                                                                                            : kPosixEinval;
+}
+
+int KernelServices::mutex_attr_set_pshared(GuestAddress slot_address, int pshared) {
+    if (pshared != 0) {
+        return kPosixEinval;
+    }
+    std::scoped_lock lock(mutex_attrs_mutex_);
+    std::uint64_t handle = 0;
+    if (!read_guest_u64(slot_address, handle)) {
+        return kPosixEinval;
+    }
+    const auto it = mutex_attrs_.find(handle);
+    if (it == mutex_attrs_.end()) {
+        return kPosixEinval;
+    }
+    it->second.pshared = 0;
+    return 0;
+}
+
 std::uint64_t KernelServices::allocate_mutex_handle_locked() {
     while (next_mutex_handle_ <= kMutexDestroyed || mutexes_.contains(next_mutex_handle_)) {
         next_mutex_handle_ += 8;
@@ -573,6 +704,8 @@ KernelServices::mutex_for_slot_locked(GuestAddress slot_address, bool create_sta
             error_out = kPosixEperm;
             return {};
         }
+        const auto type = handle == kMutexAdaptiveInitializer ? kMutexTypeAdaptive
+                                                               : kMutexTypeErrorCheck;
         std::shared_ptr<MutexRecord> record;
         try {
             record = std::make_shared<MutexRecord>();
@@ -580,6 +713,7 @@ KernelServices::mutex_for_slot_locked(GuestAddress slot_address, bool create_sta
             error_out = kPosixEnomem;
             return {};
         }
+        record->type = type;
         handle = allocate_mutex_handle_locked();
         try {
             mutexes_.emplace(handle, record);
@@ -605,8 +739,15 @@ KernelServices::mutex_for_slot_locked(GuestAddress slot_address, bool create_sta
 int KernelServices::mutex_init(GuestAddress slot_address, GuestAddress attributes,
                                GuestAddress name_address) {
     (void)name_address;
-    if (slot_address == 0 || attributes != 0 || !guest_writable(slot_address, sizeof(std::uint64_t))) {
+    if (slot_address == 0 || !guest_writable(slot_address, sizeof(std::uint64_t))) {
         return kPosixEinval;
+    }
+    MutexAttributes resolved_attributes;
+    if (attributes != 0) {
+        const auto result = mutex_attr_snapshot(attributes, resolved_attributes);
+        if (result != 0) {
+            return result;
+        }
     }
     std::scoped_lock table_lock(mutexes_mutex_);
     std::uint64_t current = 0;
@@ -622,6 +763,7 @@ int KernelServices::mutex_init(GuestAddress slot_address, GuestAddress attribute
     } catch (const std::bad_alloc&) {
         return kPosixEnomem;
     }
+    record->type = resolved_attributes.type;
     const auto handle = allocate_mutex_handle_locked();
     try {
         mutexes_.emplace(handle, record);
@@ -653,7 +795,16 @@ int KernelServices::mutex_lock(GuestAddress slot_address) {
 
     const auto self = std::this_thread::get_id();
     if (record->locked && record->owner == self) {
-        return kPosixEdeadlk;
+        if (record->type == kMutexTypeRecursive) {
+            if (record->recursion_depth == std::numeric_limits<std::size_t>::max()) {
+                return kPosixEagain;
+            }
+            ++record->recursion_depth;
+            return 0;
+        }
+        if (record->type != kMutexTypeNormal) {
+            return kPosixEdeadlk;
+        }
     }
     ++record->waiters;
     try {
@@ -665,6 +816,7 @@ int KernelServices::mutex_lock(GuestAddress slot_address) {
     --record->waiters;
     record->locked = true;
     record->owner = self;
+    record->recursion_depth = 1;
     return 0;
 }
 
@@ -686,8 +838,13 @@ int KernelServices::mutex_unlock(GuestAddress slot_address) {
     if (!record->locked || record->owner != std::this_thread::get_id()) {
         return kPosixEperm;
     }
+    if (record->type == kMutexTypeRecursive && record->recursion_depth > 1) {
+        --record->recursion_depth;
+        return 0;
+    }
     record->locked = false;
     record->owner = {};
+    record->recursion_depth = 0;
     state_lock.unlock();
     record->condition.notify_one();
     return 0;
@@ -1027,11 +1184,13 @@ int KernelServices::cond_wait_impl(GuestAddress slot_address, GuestAddress mutex
         cond_lock = std::unique_lock(cond->mutex);
     }
 
+    std::size_t saved_mutex_depth = 1;
     {
         std::unique_lock mutex_lock(mutex->mutex);
         if (!mutex->locked || mutex->owner != std::this_thread::get_id()) {
             return kPosixEperm;
         }
+        saved_mutex_depth = mutex->recursion_depth;
         try {
             cond->waiters.push_back(waiter);
         } catch (const std::bad_alloc&) {
@@ -1039,10 +1198,23 @@ int KernelServices::cond_wait_impl(GuestAddress slot_address, GuestAddress mutex
         }
         mutex->locked = false;
         mutex->owner = {};
+        mutex->recursion_depth = 0;
         mutex_lock.unlock();
         mutex->condition.notify_one();
     }
     cond_lock.unlock();
+
+    const auto reacquire_mutex = [&] {
+        const auto result = mutex_lock(mutex_slot_address);
+        if (result == 0 && saved_mutex_depth > 1) {
+            std::scoped_lock state_lock(mutex->mutex);
+            if (mutex->locked && mutex->owner == std::this_thread::get_id() &&
+                mutex->type == kMutexTypeRecursive) {
+                mutex->recursion_depth = saved_mutex_depth;
+            }
+        }
+        return result;
+    };
 
     std::chrono::nanoseconds timeout{};
     if (kind == CondWaitKind::relative) {
@@ -1059,7 +1231,7 @@ int KernelServices::cond_wait_impl(GuestAddress slot_address, GuestAddress mutex
                     cond->waiters.erase(it);
                 }
             }
-            const auto lock_result = mutex_lock(mutex_slot_address);
+            const auto lock_result = reacquire_mutex();
             return lock_result == 0 ? kPosixEinval : lock_result;
         }
         timeout = remaining_until(absolute_timeout.seconds, absolute_timeout.nanoseconds,
@@ -1085,7 +1257,7 @@ int KernelServices::cond_wait_impl(GuestAddress slot_address, GuestAddress mutex
                 cond->waiters.erase(it);
             }
         }
-        const auto lock_result = mutex_lock(mutex_slot_address);
+        const auto lock_result = reacquire_mutex();
         return lock_result == 0 ? kPosixEinval : lock_result;
     }
     waiter_lock.unlock();
@@ -1104,7 +1276,7 @@ int KernelServices::cond_wait_impl(GuestAddress slot_address, GuestAddress mutex
         }
     }
 
-    const auto lock_result = mutex_lock(mutex_slot_address);
+    const auto lock_result = reacquire_mutex();
     if (lock_result != 0) {
         return lock_result;
     }
@@ -1167,6 +1339,35 @@ int KernelServices::cond_broadcast(GuestAddress slot_address) {
     return 0;
 }
 
+
+int KernelServices::realtime_deadline(
+    GuestAddress timespec_address, std::chrono::system_clock::time_point& deadline) const {
+    GuestTimespec value;
+    if (!read_guest_timespec(timespec_address, value) || value.seconds < 0 ||
+        value.nanoseconds < 0 || value.nanoseconds >= 1'000'000'000) {
+        return kPosixEinval;
+    }
+
+    using Clock = std::chrono::system_clock;
+    using Duration = Clock::duration;
+    const auto max_duration = Duration::max();
+    const auto max_seconds = std::chrono::duration_cast<std::chrono::seconds>(max_duration);
+    if (value.seconds > max_seconds.count()) {
+        deadline = Clock::time_point::max();
+        return 0;
+    }
+
+    const auto seconds_part = std::chrono::duration_cast<Duration>(
+        std::chrono::seconds(value.seconds));
+    const auto nanoseconds_part = std::chrono::duration_cast<Duration>(
+        std::chrono::nanoseconds(value.nanoseconds));
+    if (nanoseconds_part > max_duration - seconds_part) {
+        deadline = Clock::time_point::max();
+        return 0;
+    }
+    deadline = Clock::time_point(seconds_part + nanoseconds_part);
+    return 0;
+}
 
 int KernelServices::nanosleep(GuestAddress request_address, GuestAddress remaining_address) {
     GuestTimespec request;
