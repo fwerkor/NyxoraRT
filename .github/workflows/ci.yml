@@ -10,10 +10,67 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Configure
         run: cmake -S . -B build -DNYXORA_ENABLE_WERROR=ON
       - name: Build
         run: cmake --build build --config Release --parallel
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install coverage tooling
+        run: python3 -m pip install --disable-pip-version-check gcovr==8.6
+
+      - name: Configure coverage build
+        run: >-
+          cmake -S . -B build-coverage
+          -DCMAKE_BUILD_TYPE=Debug
+          -DNYXORA_ENABLE_WERROR=ON
+          -DNYXORA_ENABLE_COVERAGE=ON
+
+      - name: Build coverage target
+        run: cmake --build build-coverage --parallel
+
+      - name: Test coverage build
+        run: ctest --test-dir build-coverage --output-on-failure
+
+      - name: Generate coverage report
+        shell: bash
+        run: |
+          mkdir -p coverage
+          gcovr \
+            --root . \
+            --object-directory build-coverage \
+            --filter 'src/' \
+            --filter 'include/' \
+            --exclude 'build-coverage/' \
+            --gcov-ignore-errors=no_working_dir_found \
+            --gcov-ignore-errors=source_not_found \
+            --txt coverage/summary.txt \
+            --html-details coverage/index.html \
+            --json coverage/coverage.json \
+            --json-pretty \
+            --cobertura coverage/cobertura.xml \
+            --cobertura-pretty \
+            --print-summary \
+            --fail-under-line 81 \
+            --fail-under-branch 52 \
+            --fail-under-function 97
+          {
+            echo '### Source coverage'
+            echo '```text'
+            tail -n 6 coverage/summary.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-coverage
+          path: coverage/
+          retention-days: 14

@@ -3,6 +3,11 @@ project(NyxoraRT VERSION 0.1.0 LANGUAGES CXX)
 
 option(NYXORA_BUILD_TESTS "Build NyxoraRT tests" ON)
 option(NYXORA_ENABLE_WERROR "Treat warnings as errors" OFF)
+option(NYXORA_ENABLE_COVERAGE "Enable source coverage instrumentation" OFF)
+
+if(NYXORA_ENABLE_COVERAGE AND NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    message(FATAL_ERROR "NYXORA_ENABLE_COVERAGE requires GCC or Clang")
+endif()
 
 find_package(Threads REQUIRED)
 
@@ -48,6 +53,11 @@ add_library(NyxoraRT::core ALIAS nyxora_core)
 target_include_directories(nyxora_core PUBLIC include)
 target_compile_features(nyxora_core PUBLIC cxx_std_20)
 target_link_libraries(nyxora_core PUBLIC Threads::Threads PRIVATE Zydis)
+
+if(NYXORA_ENABLE_COVERAGE)
+    target_compile_options(nyxora_core PUBLIC --coverage -O0 -g)
+    target_link_options(nyxora_core INTERFACE --coverage)
+endif()
 
 if(MSVC)
     target_compile_options(nyxora_core PRIVATE /W4 /permissive-)
