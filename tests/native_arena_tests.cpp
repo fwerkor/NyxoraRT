@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <utility>
 
 NYXORA_TEST(native_arena_reserves_identity_mapped_host_memory) {
     const auto page = nyxora::memory::NativeArena::page_size();
@@ -44,5 +45,23 @@ NYXORA_TEST(native_arena_can_execute_native_x86_64_code) {
     using Function = int (*)();
     auto function = reinterpret_cast<Function>(arena->host_pointer());
     NYXORA_CHECK(function() == 42);
+#endif
+}
+
+NYXORA_TEST(native_arena_move_assignment_transfers_reservation) {
+    const auto page = nyxora::memory::NativeArena::page_size();
+    auto first = nyxora::memory::NativeArena::reserve(page);
+    auto second = nyxora::memory::NativeArena::reserve(page);
+    NYXORA_CHECK(first.has_value());
+    NYXORA_CHECK(second.has_value());
+    const auto first_base = first->base();
+    *second = std::move(*first);
+    NYXORA_CHECK(!static_cast<bool>(*first));
+    NYXORA_CHECK(second->base() == first_base);
+    NYXORA_CHECK(second->host_pointer(page + 1) == nullptr);
+#if defined(_WIN32) || defined(__linux__)
+    NYXORA_CHECK(nyxora::memory::NativeArena::exact_reservation_supported());
+#else
+    NYXORA_CHECK(!nyxora::memory::NativeArena::exact_reservation_supported());
 #endif
 }

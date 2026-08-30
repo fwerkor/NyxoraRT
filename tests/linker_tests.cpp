@@ -6,6 +6,8 @@
 
 #include <cstdint>
 #include <cstring>
+#include <limits>
+#include <stdexcept>
 
 namespace {
 
@@ -102,4 +104,92 @@ NYXORA_TEST(runtime_linker_reports_and_can_retry_unresolved_imports) {
     NYXORA_CHECK(report.applied == 3);
     NYXORA_CHECK(report.unresolved.empty());
     NYXORA_CHECK(read_u64(memory, base + 0x1008) == hle_address);
+}
+
+NYXORA_TEST(runtime_linker_rejects_overflow_bad_symbol_and_unsupported_relocations) {
+    const auto image = nyxora::loader::Elf64Image::from_bytes(test_fixture::sce_dynamic_elf());
+    const auto parsed = nyxora::loader::parse_dynamic_info(image);
+    NYXORA_CHECK(parsed.has_value());
+    nyxora::memory::GuestAddressSpace memory;
+    nyxora::runtime::SymbolRegistry symbols;
+    nyxora::runtime::RuntimeLinker linker(memory, symbols);
+
+    auto overflow_export = *parsed;
+    overflow_export.symbols[2].value = 0x40;
+    bool export_overflow = false;
+    try {
+        (void)linker.register_exports(std::numeric_limits<std::uint64_t>::max() - 0x20,
+                                      overflow_export);
+    } catch (const std::runtime_error&) {
+        export_overflow = true;
+    }
+    NYXORA_CHECK(export_overflow);
+
+    auto patch_overflow = *parsed;
+    patch_overflow.relocations = {
+        nyxora::loader::Relocation{std::numeric_limits<std::uint64_t>::max(),
+                                   nyxora::loader::kRelocationX86_64Relative, 0}};
+    patch_overflow.plt_relocations.clear();
+    bool relocation_overflow = false;
+    try {
+        (void)linker.relocate(1, 1, patch_overflow);
+    } catch (const std::runtime_error&) {
+        relocation_overflow = true;
+    }
+    NYXORA_CHECK(relocation_overflow);
+
+    auto bad_symbol = *parsed;
+    bad_symbol.relocations = {
+        nyxora::loader::Relocation{0, (std::uint64_t{99} << 32U) |
+                                          nyxora::loader::kRelocationX86_64GlobDat,
+                                   0}};
+    bad_symbol.plt_relocations.clear();
+    bool bad_symbol_index = false;
+    try {
+        (void)linker.relocate(0x1000, 1, bad_symbol);
+    } catch (const std::runtime_error&) {
+        bad_symbol_index = true;
+    }
+    NYXORA_CHECK(bad_symbol_index);
+
+    auto unsupported = *parsed;
+    unsupported.relocations = {nyxora::loader::Relocation{0, 0xffffU, 0}};
+    unsupported.plt_relocations.clear();
+    bool unsupported_type = false;
+    try {
+        (void)linker.relocate(0x1000, 1, unsupported);
+    } catch (const std::runtime_error&) {
+        unsupported_type = true;
+    }
+    NYXORA_CHECK(unsupported_type);
+}
+
+NYXORA_TEST(runtime_linker_reports_missing_tls_module_and_unmapped_patch_target) {
+    nyxora::memory::GuestAddressSpace memory;
+    nyxora::runtime::SymbolRegistry symbols;
+    nyxora::runtime::RuntimeLinker linker(memory, symbols);
+    nyxora::loader::DynamicInfo dynamic;
+    dynamic.relocations = {
+        nyxora::loader::Relocation{0x20, nyxora::loader::kRelocationX86_64DtpMod64, 0}};
+
+    const auto unresolved = linker.relocate(0x1000, 0, dynamic);
+    NYXORA_CHECK(unresolved.applied == 0);
+    NYXORA_CHECK(unresolved.unresolved.size() == 1);
+    NYXORA_CHECK(unresolved.unresolved[0].type == nyxora::loader::kRelocationX86_64DtpMod64);
+
+    dynamic.relocations = {
+        nyxora::loader::Relocation{0, nyxora::loader::kRelocationX86_64Relative, 0}};
+    bool unmapped_target = false;
+    try {
+        (void)linker.relocate(0x1000, 1, dynamic);
+    } catch (const std::runtime_error&) {
+        unmapped_target = true;
+    }
+    NYXORA_CHECK(unmapped_target);
+
+    dynamic.relocations = {
+        nyxora::loader::Relocation{0, nyxora::loader::kRelocationX86_64Relative, -2}};
+    const auto underflow = linker.relocate(1, 1, dynamic);
+    NYXORA_CHECK(underflow.applied == 0);
+    NYXORA_CHECK(underflow.unresolved.empty());
 }

@@ -6,6 +6,8 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 
 namespace {
@@ -162,6 +164,10 @@ NYXORA_TEST(runtime_invoke_entry_uses_native_guest_thread_path) {
 
     NYXORA_CHECK(nyxora::runtime::ScopedGuestThreadContext::current() == nullptr);
     NYXORA_CHECK(runtime.invoke_entry(module, 64 * 1024) == 42);
+    auto guest_thread = runtime.start_thread(module, 64 * 1024);
+    const auto guest_result = guest_thread.join();
+    NYXORA_CHECK(!guest_result.fault.has_value());
+    NYXORA_CHECK(guest_result.value == 42);
     NYXORA_CHECK(nyxora::runtime::ScopedGuestThreadContext::current() == nullptr);
 #endif
 }
@@ -315,4 +321,94 @@ NYXORA_TEST(runtime_fault_capture_remains_active_after_nonzero_tcb_patch) {
         NYXORA_CHECK(fault.fault().instruction_pointer == module.entry + 11);
     }
 #endif
+}
+
+NYXORA_TEST(runtime_rejects_null_backend_and_non_native_entry_invocation) {
+    bool null_backend = false;
+    try {
+        nyxora::runtime::Runtime runtime(nullptr);
+    } catch (const std::invalid_argument&) {
+        null_backend = true;
+    }
+    NYXORA_CHECK(null_backend);
+
+    nyxora::runtime::Runtime runtime(std::make_unique<nyxora::gpu::NullBackend>());
+    nyxora::runtime::LoadedModule module{};
+    module.entry = 0x1000;
+    bool non_native = false;
+    try {
+        (void)runtime.invoke_entry(module, 64 * 1024);
+    } catch (const std::runtime_error&) {
+        non_native = true;
+    }
+    NYXORA_CHECK(non_native);
+}
+
+NYXORA_TEST(runtime_rejects_unmapped_and_nonexecutable_native_entries) {
+#if defined(__x86_64__) || defined(_M_X64)
+    const auto page = nyxora::memory::NativeArena::page_size();
+    auto memory = nyxora::memory::GuestAddressSpace::reserve_native(page * 2U);
+    NYXORA_CHECK(memory.has_value());
+    const auto base = memory->native_base();
+    nyxora::runtime::Runtime runtime(std::make_unique<nyxora::gpu::NullBackend>(),
+                                     std::move(*memory));
+    nyxora::runtime::LoadedModule module{};
+    module.entry = base;
+
+    bool unmapped = false;
+    try {
+        (void)runtime.invoke_entry(module, 64 * 1024);
+    } catch (const std::runtime_error&) {
+        unmapped = true;
+    }
+    NYXORA_CHECK(unmapped);
+
+    NYXORA_CHECK(runtime.memory().map(base, page, nyxora::memory::Protection::read,
+                                      "non-executable"));
+    bool non_executable = false;
+    try {
+        (void)runtime.invoke_entry(module, 64 * 1024);
+    } catch (const std::runtime_error&) {
+        non_executable = true;
+    }
+    NYXORA_CHECK(non_executable);
+#endif
+}
+
+NYXORA_TEST(runtime_relink_without_dynamic_metadata_is_a_noop) {
+    nyxora::runtime::Runtime runtime(std::make_unique<nyxora::gpu::NullBackend>());
+    nyxora::runtime::LoadedModule module{};
+    module.relocations.applied = 7;
+    module.relocations.late_thunks = 3;
+    const auto report = runtime.relink(module);
+    NYXORA_CHECK(report.applied == 0);
+    NYXORA_CHECK(report.late_thunks == 0);
+    NYXORA_CHECK(report.unresolved.empty());
+}
+
+NYXORA_TEST(runtime_load_elf_configures_app0_root_from_executable_directory) {
+    const auto root = std::filesystem::temp_directory_path() / "nyxora-runtime-load-elf";
+    std::filesystem::create_directories(root);
+    struct Cleanup {
+        std::filesystem::path root;
+        ~Cleanup() {
+            std::error_code error;
+            std::filesystem::remove_all(root, error);
+        }
+    } cleanup{root};
+
+    const auto path = root / "fixture.elf";
+    const auto bytes = test_fixture::sce_dynamic_elf();
+    {
+        std::ofstream output(path, std::ios::binary);
+        output.write(reinterpret_cast<const char*>(bytes.data()),
+                     static_cast<std::streamsize>(bytes.size()));
+    }
+
+    constexpr nyxora::GuestAddress base = 0x710000000ULL;
+    nyxora::runtime::Runtime runtime(std::make_unique<nyxora::gpu::NullBackend>());
+    const auto module = runtime.load_elf(path, base);
+    NYXORA_CHECK(module.base == base);
+    NYXORA_CHECK(module.dynamic.has_value());
+    NYXORA_CHECK(runtime.set_guest_root(root));
 }

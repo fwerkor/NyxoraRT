@@ -86,3 +86,15 @@ NYXORA_TEST(native_guest_address_space_unmap_range_releases_subrange_for_reuse) 
     NYXORA_CHECK(memory->write(base + page, value));
     NYXORA_CHECK(memory->view(base + page, 1)[0] == value[0]);
 }
+
+NYXORA_TEST(guest_address_space_exact_unmap_requires_matching_region) {
+    nyxora::memory::GuestAddressSpace memory;
+    constexpr nyxora::GuestAddress base = 0x9000;
+    constexpr nyxora::GuestSize size = 0x1000;
+    NYXORA_CHECK(memory.map(base, size, nyxora::memory::Protection::read, "exact"));
+    NYXORA_CHECK(!memory.unmap(base, size / 2));
+    NYXORA_CHECK(memory.find(base) != nullptr);
+    NYXORA_CHECK(memory.unmap(base, size));
+    NYXORA_CHECK(memory.find(base) == nullptr);
+    NYXORA_CHECK(!memory.unmap(base, size));
+}

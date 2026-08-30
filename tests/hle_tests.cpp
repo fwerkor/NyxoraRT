@@ -1870,3 +1870,296 @@ NYXORA_TEST(libkernel_file_seek_stat_and_fstat_preserve_guest_abi_and_errno) {
     NYXORA_CHECK(trampoline->invoke(close->address, stack->top(), fd) == 0);
 #endif
 }
+
+NYXORA_TEST(libkernel_core_bindings_fail_safely_without_runtime_context) {
+#if defined(__x86_64__) || defined(_M_X64)
+    nyxora::runtime::SymbolRegistry symbols;
+    nyxora::runtime::HleRegistry hle(symbols);
+    nyxora::hle::libkernel::register_core(hle);
+    const std::array<std::uint64_t, 7> zeros{};
+    auto invoke = [&](const char* nid) {
+        const auto binding = symbols.resolve(libkernel_key(nid));
+        NYXORA_CHECK(binding.has_value());
+        return invoke_guest_sysv_call(binding->address, zeros);
+    };
+
+    const auto process_us = invoke("4J2sUJmuHZQ");
+    const auto process_counter = invoke("fgxnMeTNUtY");
+    NYXORA_CHECK(process_counter / 1'000ULL >= process_us);
+    NYXORA_CHECK(invoke("BNowx2l588E") == 1'000'000'000ULL);
+    NYXORA_CHECK(invoke("g0VTBxfJyu0") == 0);
+    NYXORA_CHECK(invoke("9BcDykPmo1I") != 0);
+    NYXORA_CHECK(invoke("pO96TwzOm5E") == 0);
+
+    for (const char* nid : {"QcteRwbsnV0", "0wu33hunNdE", "6XG4B33N09g",
+                            "T72hz6ffq08", "1jfXLRVzisc", "-ZR+hG7aDHw", "EotR8a3ASf4"}) {
+        NYXORA_CHECK(invoke(nid) == 0);
+    }
+
+    constexpr auto posix_failure = std::numeric_limits<std::uint64_t>::max();
+    for (const char* nid : {"NhpspxdjEKU", "YQOfxL4QfeU", "BPE9s9vQQXo", "UqDGjXA5yUM",
+                            "wuCroIGjt2g", "AqBioC2vF3I", "bY-PO6JhzhQ", "Oy6IpwgtYOk",
+                            "E6ao34wPw+U", "mqQMh1zPPT8", "pDuPEf3m4fI", "cDW233RAwWo",
+                            "YCV5dGGBcCo", "WBWzsRifCEA", "w5IHyvahg-o", "4SbrhCozqQU",
+                            "IKP8typ0QUk", "Bq+LRV-N6Hk"}) {
+        NYXORA_CHECK(invoke(nid) == posix_failure);
+    }
+
+    constexpr std::uint64_t posix_einval = nyxora::runtime::KernelServices::kPosixEinval;
+    for (const char* nid : {"OxhIB8LB-PQ", "h9CcP3J0oVM", "PkS44IGrDkM", "+U1R4WtXvoc",
+                            "wtkt-teR1so", "zHchY8ft5pk", "0qOtCR-ZHck", "2Q0z6rnBrTE",
+                            "VUT1ZSrHT0I", "E+tyo3lp5Lw", "dQHWEsJtoE4", "HF7lK46xzjY",
+                            "GZFlI7RhuQo", "mDmgMOGVUqg", "PmL-TwKUzXI", "EXv3ztGqtDM",
+                            "ttHNfU+qDBU", "7H0iTOciTLo", "2Z+PpY6CaJg", "ltCfaGr2JGE",
+                            "mKoTx03HRWA", "dJcuQVn6-Iw", "cTDYxTUNPhM", "EjllaAqAPZo",
+                            "h0qUqSuOmC8", "3BpP850hBT4", "0TyVk4MSLt0", "RXXqi4CtF8w",
+                            "Op8TBGY5KHg", "27bAgiJmOh0", "K953PF5u6Pc", "2MOy+rUfuhQ",
+                            "mkx2fVhNMsg"}) {
+        NYXORA_CHECK(invoke(nid) == posix_einval);
+    }
+
+    constexpr auto encoded_einval = static_cast<std::uint64_t>(
+        static_cast<std::int64_t>(static_cast<std::int32_t>(
+            nyxora::runtime::KernelServices::kErrorEinval)));
+    constexpr auto encoded_ebadf = static_cast<std::uint64_t>(
+        static_cast<std::int64_t>(static_cast<std::int32_t>(
+            nyxora::runtime::KernelServices::kErrorEbadf)));
+    for (const char* nid : {"vSMAm3cxYTY", "PGhQHd-dzv8", "cQke9UuBQOk", "1G3lF1Gg1k8",
+                            "eV9wAD2riIA", "QvsZxomvUHs"}) {
+        NYXORA_CHECK(invoke(nid) == encoded_einval);
+    }
+    for (const char* nid : {"Cg4srZ6TKbU", "UK2Tl2DWUns", "oib76F-12fk", "kBwCPsYX-m4"}) {
+        NYXORA_CHECK(invoke(nid) == encoded_ebadf);
+    }
+
+    for (const char* nid : {"GEnUkDZoUwY", "Vwc+L05e6oE", "C36iRE0F5sE", "H2a+IN9TP0E",
+                            "fjN6NQHhK8k", "aishVAiFaYM", "DjpBvGlaWbQ", "nsYoNRywwNg",
+                            "62KCwEMmzcM", "-fA+7ZlGDQs", "UTXzJbWhhTE", "JaRMy+QcpeU",
+                            "-Wreprtu0Qs", "n2MMpvU8igI", "F8bUHwAG284", "smWEktiyyG0",
+                            "gquEhBrS2iw", "iMp8QpE+XO4", "losEubHc64c", "mxKx9bxXF2I",
+                            "cmo1RIYva9o", "9UK1vLZQft4", "tn3VlD0hG60", "2Of0f+3mhhE",
+                            "m5-2bsNfv7s", "waPcxYiR3WA", "6qM3kO5S3Oo", "c-bxj027czs",
+                            "Dn-DRWi9t54", "6xMew9+rZwI", "2Tb92quprl0", "g+PZd2hiacg",
+                            "WKAXJ4XBPQ4", "BmMjYxmew1w", "kDh-NfxgMtE", "JGgj7Uvrl+A"}) {
+        NYXORA_CHECK(invoke(nid) == encoded_einval);
+    }
+#endif
+}
+
+NYXORA_TEST(kernel_services_reject_invalid_memory_and_file_requests_deterministically) {
+    constexpr nyxora::GuestAddress base = 0x240000;
+    constexpr nyxora::GuestSize region_size = 0x10000;
+    nyxora::memory::GuestAddressSpace memory;
+    NYXORA_CHECK(memory.map(base, region_size,
+                            nyxora::memory::Protection::read |
+                                nyxora::memory::Protection::write,
+                            "kernel-validation"));
+    nyxora::runtime::KernelServices services(memory);
+    auto kernel_error = [](std::uint32_t value) {
+        return static_cast<std::int64_t>(static_cast<std::int32_t>(value));
+    };
+
+    NYXORA_CHECK(services.direct_memory_size() == 0);
+    NYXORA_CHECK(services.mprotect(base, 1, 0x08) ==
+                 kernel_error(nyxora::runtime::KernelServices::kErrorEinval));
+    NYXORA_CHECK(services.mprotect(base, 0, 1) == 0);
+    NYXORA_CHECK(services.mprotect(base + region_size, 0x4000, 1) ==
+                 kernel_error(nyxora::runtime::KernelServices::kErrorEnomem));
+
+    NYXORA_CHECK(services.map_memory(0, 0, 1, 0x1002, -1, 0) ==
+                 kernel_error(nyxora::runtime::KernelServices::kErrorEinval));
+    NYXORA_CHECK(services.map_memory(0, 0x4000, 1, 0x80000000U, -1, 0) ==
+                 kernel_error(nyxora::runtime::KernelServices::kErrorEinval));
+    NYXORA_CHECK(services.map_memory(0, 0x4000, 0x08, 0x1002, -1, 0) ==
+                 kernel_error(nyxora::runtime::KernelServices::kErrorEinval));
+    NYXORA_CHECK(services.map_memory(0, 0x4000, 0x10, 0x1002, -1, 0) ==
+                 kernel_error(nyxora::runtime::KernelServices::kErrorEnotsup));
+    NYXORA_CHECK(services.map_memory(base + 1, 0x4000, 1, 0x1012, -1, 0) ==
+                 kernel_error(nyxora::runtime::KernelServices::kErrorEinval));
+    NYXORA_CHECK(services.map_memory(0, 0x4000, 1, 0x3002, -1, 0) ==
+                 kernel_error(nyxora::runtime::KernelServices::kErrorEnotsup));
+    NYXORA_CHECK(services.map_memory(0, 0x4000, 1, 0x1, 3, 0) ==
+                 kernel_error(nyxora::runtime::KernelServices::kErrorEnotsup));
+    NYXORA_CHECK(services.map_memory(0, 0x4000, 1, 0x2, 3, -1) ==
+                 kernel_error(nyxora::runtime::KernelServices::kErrorEinval));
+    NYXORA_CHECK(services.map_memory(0, 0x4000, 1, 0x2, 99, 0) ==
+                 kernel_error(nyxora::runtime::KernelServices::kErrorEbadf));
+    NYXORA_CHECK(services.map_memory_to(0, 0x4000, 1, 0x1002, -1, 0, 0) ==
+                 kernel_error(nyxora::runtime::KernelServices::kErrorEfault));
+    NYXORA_CHECK(services.unmap_memory(base, 0) ==
+                 kernel_error(nyxora::runtime::KernelServices::kErrorEinval));
+
+    constexpr nyxora::GuestAddress path = base + 0x100;
+    constexpr nyxora::GuestAddress buffer = base + 0x1000;
+    constexpr nyxora::GuestAddress stat = base + 0x2000;
+    constexpr char missing_path[] = "/app0/missing.txt";
+    NYXORA_CHECK(memory.write(
+        path, std::span<const std::byte>(reinterpret_cast<const std::byte*>(missing_path),
+                                         sizeof(missing_path))));
+    NYXORA_CHECK(services.open_readonly(path, 0, 0) ==
+                 kernel_error(nyxora::runtime::KernelServices::kErrorEacces));
+    NYXORA_CHECK(services.stat_path(path, stat) ==
+                 kernel_error(nyxora::runtime::KernelServices::kErrorEacces));
+    const auto missing_root =
+        std::filesystem::temp_directory_path() / "nyxora-kernel-validation-missing";
+    std::error_code missing_root_error;
+    std::filesystem::remove_all(missing_root, missing_root_error);
+    NYXORA_CHECK(!services.set_guest_root(missing_root));
+
+    const auto root = std::filesystem::temp_directory_path() / "nyxora-kernel-validation";
+    std::filesystem::create_directories(root);
+    struct Cleanup {
+        std::filesystem::path root;
+        ~Cleanup() {
+            std::error_code error;
+            std::filesystem::remove_all(root, error);
+        }
+    } cleanup{root};
+    {
+        std::ofstream file(root / "data.bin", std::ios::binary);
+        file << "abc";
+    }
+    NYXORA_CHECK(services.set_guest_root(root));
+    NYXORA_CHECK(services.open_readonly(0, 0, 0) ==
+                 kernel_error(nyxora::runtime::KernelServices::kErrorEfault));
+    NYXORA_CHECK(services.open_readonly(path, 0, 0) ==
+                 kernel_error(nyxora::runtime::KernelServices::kErrorEnoent));
+    NYXORA_CHECK(services.open_readonly(path, 0x200, 0) ==
+                 kernel_error(nyxora::runtime::KernelServices::kErrorEacces));
+    NYXORA_CHECK(services.read(99, buffer, 1) ==
+                 kernel_error(nyxora::runtime::KernelServices::kErrorEbadf));
+    NYXORA_CHECK(services.read(99, 0, 1) ==
+                 kernel_error(nyxora::runtime::KernelServices::kErrorEfault));
+    NYXORA_CHECK(services.seek(99, 0, 0) ==
+                 kernel_error(nyxora::runtime::KernelServices::kErrorEbadf));
+    NYXORA_CHECK(services.fstat(99, stat) ==
+                 kernel_error(nyxora::runtime::KernelServices::kErrorEbadf));
+    NYXORA_CHECK(services.close(99) ==
+                 kernel_error(nyxora::runtime::KernelServices::kErrorEbadf));
+    NYXORA_CHECK(services.stat_path(0, stat) ==
+                 kernel_error(nyxora::runtime::KernelServices::kErrorEfault));
+    NYXORA_CHECK(services.stat_path(path, 0) ==
+                 kernel_error(nyxora::runtime::KernelServices::kErrorEnoent));
+
+    constexpr char valid_path[] = "/app0/data.bin";
+    NYXORA_CHECK(memory.write(
+        path, std::span<const std::byte>(reinterpret_cast<const std::byte*>(valid_path),
+                                         sizeof(valid_path))));
+    const auto fd = services.open_readonly(path, 0, 0);
+    NYXORA_CHECK(fd >= 3);
+    NYXORA_CHECK(services.read(static_cast<int>(fd), buffer, 0) == 0);
+    NYXORA_CHECK(services.seek(static_cast<int>(fd), 0, 3) ==
+                 kernel_error(nyxora::runtime::KernelServices::kErrorEnotty));
+    NYXORA_CHECK(services.seek(static_cast<int>(fd), 0, 99) ==
+                 kernel_error(nyxora::runtime::KernelServices::kErrorEinval));
+    NYXORA_CHECK(services.fstat(static_cast<int>(fd), 0) ==
+                 kernel_error(nyxora::runtime::KernelServices::kErrorEfault));
+    NYXORA_CHECK(services.close(static_cast<int>(fd)) == 0);
+    NYXORA_CHECK(services.close(static_cast<int>(fd)) ==
+                 kernel_error(nyxora::runtime::KernelServices::kErrorEbadf));
+}
+
+NYXORA_TEST(kernel_services_reject_invalid_sync_object_states_and_wrong_owner) {
+    constexpr nyxora::GuestAddress base = 0x280000;
+    nyxora::memory::GuestAddressSpace memory;
+    NYXORA_CHECK(memory.map(base, 0x10000,
+                            nyxora::memory::Protection::read |
+                                nyxora::memory::Protection::write,
+                            "sync-validation"));
+    nyxora::runtime::KernelServices services(memory);
+    constexpr auto thread_attr = base + 0x100;
+    constexpr auto mutex_attr = base + 0x200;
+    constexpr auto cond_attr = base + 0x300;
+    constexpr auto mutex = base + 0x400;
+    constexpr auto cond = base + 0x500;
+    constexpr auto sem = base + 0x600;
+    constexpr auto output = base + 0x700;
+    constexpr auto timespec = base + 0x800;
+
+    NYXORA_CHECK(services.thread_attr_init(0) == nyxora::runtime::KernelServices::kPosixEinval);
+    NYXORA_CHECK(services.thread_attr_init(thread_attr) == 0);
+    NYXORA_CHECK(services.thread_attr_get_stack_size(thread_attr, 0) ==
+                 nyxora::runtime::KernelServices::kPosixEinval);
+    NYXORA_CHECK(services.thread_attr_set_stack_size(
+                     thread_attr, nyxora::runtime::KernelServices::kMinimumThreadStackSize - 1) ==
+                 nyxora::runtime::KernelServices::kPosixEinval);
+    NYXORA_CHECK(services.thread_attr_set_detach_state(thread_attr, 2) ==
+                 nyxora::runtime::KernelServices::kPosixEinval);
+    NYXORA_CHECK(services.thread_attr_destroy(thread_attr) == 0);
+    NYXORA_CHECK(services.thread_attr_destroy(thread_attr) ==
+                 nyxora::runtime::KernelServices::kPosixEinval);
+
+    NYXORA_CHECK(services.mutex_attr_init(0) == nyxora::runtime::KernelServices::kPosixEinval);
+    NYXORA_CHECK(services.mutex_attr_init(mutex_attr) == 0);
+    NYXORA_CHECK(services.mutex_attr_get_type(mutex_attr, 0) ==
+                 nyxora::runtime::KernelServices::kPosixEinval);
+    NYXORA_CHECK(services.mutex_attr_set_type(mutex_attr, 99) ==
+                 nyxora::runtime::KernelServices::kPosixEinval);
+    NYXORA_CHECK(services.mutex_attr_set_pshared(mutex_attr, 1) ==
+                 nyxora::runtime::KernelServices::kPosixEinval);
+    NYXORA_CHECK(services.mutex_attr_destroy(mutex_attr) == 0);
+    NYXORA_CHECK(services.mutex_attr_destroy(mutex_attr) ==
+                 nyxora::runtime::KernelServices::kPosixEinval);
+
+    NYXORA_CHECK(services.mutex_lock(0) == nyxora::runtime::KernelServices::kPosixEinval);
+    NYXORA_CHECK(services.mutex_unlock(0) == nyxora::runtime::KernelServices::kPosixEinval);
+    NYXORA_CHECK(services.mutex_destroy(0) == nyxora::runtime::KernelServices::kPosixEinval);
+    NYXORA_CHECK(services.mutex_unlock(mutex) == nyxora::runtime::KernelServices::kPosixEperm);
+    NYXORA_CHECK(services.mutex_destroy(mutex) == 0);
+    NYXORA_CHECK(services.mutex_init(mutex, 0, 0) == 0);
+    NYXORA_CHECK(services.mutex_init(mutex, 0, 0) == nyxora::runtime::KernelServices::kPosixEbusy);
+    NYXORA_CHECK(services.mutex_lock(mutex) == 0);
+    NYXORA_CHECK(services.mutex_destroy(mutex) == nyxora::runtime::KernelServices::kPosixEbusy);
+    std::atomic<int> wrong_owner{0};
+    std::thread other([&] { wrong_owner.store(services.mutex_unlock(mutex)); });
+    other.join();
+    NYXORA_CHECK(wrong_owner.load() == nyxora::runtime::KernelServices::kPosixEperm);
+    NYXORA_CHECK(services.mutex_unlock(mutex) == 0);
+    NYXORA_CHECK(services.mutex_destroy(mutex) == 0);
+    NYXORA_CHECK(services.mutex_lock(mutex) == nyxora::runtime::KernelServices::kPosixEinval);
+    NYXORA_CHECK(services.mutex_destroy(mutex) == nyxora::runtime::KernelServices::kPosixEinval);
+
+    NYXORA_CHECK(services.cond_attr_init(0) == nyxora::runtime::KernelServices::kPosixEinval);
+    NYXORA_CHECK(services.cond_attr_init(cond_attr) == 0);
+    NYXORA_CHECK(services.cond_attr_get_clock(cond_attr, 0) ==
+                 nyxora::runtime::KernelServices::kPosixEinval);
+    NYXORA_CHECK(services.cond_attr_set_clock(cond_attr, 99) ==
+                 nyxora::runtime::KernelServices::kPosixEinval);
+    NYXORA_CHECK(services.cond_attr_set_pshared(cond_attr, 1) ==
+                 nyxora::runtime::KernelServices::kPosixEinval);
+    NYXORA_CHECK(services.cond_attr_destroy(cond_attr) == 0);
+    NYXORA_CHECK(services.cond_attr_destroy(cond_attr) ==
+                 nyxora::runtime::KernelServices::kPosixEinval);
+    NYXORA_CHECK(services.cond_init(0, 0) == nyxora::runtime::KernelServices::kPosixEinval);
+    NYXORA_CHECK(services.cond_destroy(cond) == 0);
+    NYXORA_CHECK(services.cond_signal(0) == nyxora::runtime::KernelServices::kPosixEinval);
+    NYXORA_CHECK(services.cond_broadcast(0) == nyxora::runtime::KernelServices::kPosixEinval);
+    NYXORA_CHECK(services.cond_wait(cond, 0) == nyxora::runtime::KernelServices::kPosixEinval);
+    NYXORA_CHECK(services.cond_init(cond, 0) == 0);
+    NYXORA_CHECK(services.cond_signal(cond) == 0);
+    NYXORA_CHECK(services.cond_broadcast(cond) == 0);
+    NYXORA_CHECK(services.cond_destroy(cond) == 0);
+    NYXORA_CHECK(services.cond_destroy(cond) == nyxora::runtime::KernelServices::kPosixEinval);
+
+    NYXORA_CHECK(services.sem_init(sem, 0, nyxora::runtime::KernelServices::kSemaphoreValueMax + 1U) ==
+                 nyxora::runtime::KernelServices::kPosixEinval);
+    NYXORA_CHECK(services.sem_init(0, 0, 1) == 0);
+    NYXORA_CHECK(services.sem_try_wait(0) == nyxora::runtime::KernelServices::kPosixEinval);
+    NYXORA_CHECK(services.sem_post(0) == nyxora::runtime::KernelServices::kPosixEinval);
+    NYXORA_CHECK(services.sem_get_value(0, output) == nyxora::runtime::KernelServices::kPosixEinval);
+    NYXORA_CHECK(services.sem_init(sem, 0, 0) == 0);
+    NYXORA_CHECK(services.sem_timed_wait(sem, 0) == nyxora::runtime::KernelServices::kPosixEinval);
+    NYXORA_CHECK(services.sem_get_value(sem, 0) == 0);
+    NYXORA_CHECK(services.sem_destroy(sem) == 0);
+    NYXORA_CHECK(services.sem_destroy(sem) == nyxora::runtime::KernelServices::kPosixEinval);
+
+    NYXORA_CHECK(services.nanosleep(0, 0) == nyxora::runtime::KernelServices::kPosixEinval);
+    const std::array<std::int64_t, 2> invalid_time{0, 1'000'000'000};
+    NYXORA_CHECK(memory.write(
+        timespec, std::span<const std::byte>(reinterpret_cast<const std::byte*>(invalid_time.data()),
+                                             sizeof(invalid_time))));
+    NYXORA_CHECK(services.nanosleep(timespec, 0) == nyxora::runtime::KernelServices::kPosixEinval);
+    std::chrono::system_clock::time_point deadline;
+    NYXORA_CHECK(services.realtime_deadline(timespec, deadline) ==
+                 nyxora::runtime::KernelServices::kPosixEinval);
+}

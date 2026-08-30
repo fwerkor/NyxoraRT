@@ -8,6 +8,9 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <chrono>
+#include <stdexcept>
+#include <utility>
 #include <memory>
 
 NYXORA_TEST(guest_thread_executes_and_joins_with_return_value) {
@@ -97,5 +100,46 @@ NYXORA_TEST(linux_guest_threads_receive_distinct_tcb_bases) {
     NYXORA_CHECK(second_result.value != 0);
     NYXORA_CHECK(first_result.value != second_result.value);
     NYXORA_CHECK(nyxora::runtime::ScopedGuestSegment::current_base() == main_gs);
+#endif
+}
+
+NYXORA_TEST(guest_thread_empty_state_and_move_assignment_are_well_defined) {
+    nyxora::runtime::GuestThread empty;
+    NYXORA_CHECK(!empty.joinable());
+    NYXORA_CHECK(!empty.finished());
+    NYXORA_CHECK(!empty.wait_until(std::chrono::system_clock::now()));
+    bool empty_join_rejected = false;
+    try {
+        (void)empty.join();
+    } catch (const std::runtime_error&) {
+        empty_join_rejected = true;
+    }
+    NYXORA_CHECK(empty_join_rejected);
+
+#if defined(__x86_64__) || defined(_M_X64)
+    nyxora::runtime::TlsRegistry registry;
+    const auto page = nyxora::memory::NativeArena::page_size();
+    auto code = nyxora::memory::NativeArena::reserve(page);
+    NYXORA_CHECK(code.has_value());
+    NYXORA_CHECK(code->protect(0, page,
+                               nyxora::memory::Protection::read |
+                                   nyxora::memory::Protection::write));
+    const std::array<std::byte, 6> return_code{
+        std::byte{0xb8}, std::byte{0x2b}, std::byte{0x00},
+        std::byte{0x00}, std::byte{0x00}, std::byte{0xc3}};
+    NYXORA_CHECK(code->copy(0, return_code));
+    NYXORA_CHECK(code->flush_instruction_cache(0, return_code.size()));
+    NYXORA_CHECK(code->protect(0, page,
+                               nyxora::memory::Protection::read |
+                                   nyxora::memory::Protection::execute));
+    auto source = nyxora::runtime::GuestThread::start(
+        registry, reinterpret_cast<nyxora::GuestAddress>(code->host_pointer()), 64 * 1024);
+    NYXORA_CHECK(source.has_value());
+    nyxora::runtime::GuestThread destination;
+    destination = std::move(*source);
+    NYXORA_CHECK(destination.joinable());
+    const auto result = destination.join();
+    NYXORA_CHECK(result.completed());
+    NYXORA_CHECK(result.value == 43);
 #endif
 }

@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <utility>
 
 NYXORA_TEST(tls_context_copies_initial_image_and_zeroes_bss) {
     nyxora::runtime::TlsRegistry registry;
@@ -146,5 +147,33 @@ NYXORA_TEST(linux_guest_code_reads_tcb_through_gs) {
     const auto result = trampoline->invoke(
         reinterpret_cast<nyxora::GuestAddress>(code->host_pointer()), stack->top());
     NYXORA_CHECK(result == reinterpret_cast<std::uint64_t>(context->tcb()));
+#endif
+}
+
+NYXORA_TEST(tls_context_move_assignment_rebinds_tcb_and_const_lookup) {
+    nyxora::runtime::TlsRegistry registry;
+    const std::array<std::byte, 2> initial{std::byte{0x71}, std::byte{0x72}};
+    NYXORA_CHECK(registry.register_module(2, 16, 8, initial));
+    auto source = nyxora::runtime::GuestThreadContext::create(registry);
+    NYXORA_CHECK(source.has_value());
+    nyxora::runtime::GuestThreadContext destination;
+    destination = std::move(*source);
+    NYXORA_CHECK(destination.tcb()->self == destination.tcb());
+    NYXORA_CHECK(destination.tcb()->dtv == destination.dtv().data());
+    const auto& const_context = destination;
+    const auto* data = static_cast<const std::byte*>(const_context.tls_address(2, 1));
+    NYXORA_CHECK(data != nullptr);
+    NYXORA_CHECK(*data == std::byte{0x72});
+    NYXORA_CHECK(const_context.tls_address(99) == nullptr);
+#if defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
+    NYXORA_CHECK(nyxora::runtime::windows_guest_tcb_teb_offset().has_value());
+    NYXORA_CHECK(nyxora::runtime::windows_host_stack_teb_offset().has_value());
+#elif defined(__linux__) && defined(__x86_64__)
+    NYXORA_CHECK(!nyxora::runtime::windows_guest_tcb_teb_offset().has_value());
+    NYXORA_CHECK(!nyxora::runtime::windows_host_stack_teb_offset().has_value());
+    NYXORA_CHECK(nyxora::runtime::ScopedGuestSegment::supported());
+#else
+    NYXORA_CHECK(!nyxora::runtime::windows_guest_tcb_teb_offset().has_value());
+    NYXORA_CHECK(!nyxora::runtime::windows_host_stack_teb_offset().has_value());
 #endif
 }
