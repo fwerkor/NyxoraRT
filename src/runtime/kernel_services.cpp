@@ -37,6 +37,38 @@ constexpr std::uint32_t kClockVirtual = 1;
 constexpr std::uint32_t kClockProf = 2;
 constexpr std::uint32_t kClockMonotonic = 4;
 
+constexpr std::uint16_t kModeDirectory = 0040000;
+constexpr std::uint16_t kModeRegular = 0100000;
+constexpr std::uint16_t kModePermissions = 0000777;
+
+struct GuestStatTimespec {
+    std::int64_t seconds{};
+    std::int64_t nanoseconds{};
+};
+
+struct GuestFileStat {
+    std::uint32_t device{};
+    std::uint32_t inode{};
+    std::uint16_t mode{};
+    std::uint16_t link_count{};
+    std::uint32_t uid{};
+    std::uint32_t gid{};
+    std::uint32_t rdev{};
+    GuestStatTimespec access_time{};
+    GuestStatTimespec modification_time{};
+    GuestStatTimespec change_time{};
+    std::int64_t size{};
+    std::int64_t blocks{};
+    std::uint32_t block_size{};
+    std::uint32_t flags{};
+    std::uint32_t generation{};
+    std::int32_t spare{};
+    GuestStatTimespec birth_time{};
+};
+
+static_assert(sizeof(GuestStatTimespec) == 16);
+static_assert(sizeof(GuestFileStat) == 120);
+
 bool supported_mutex_type(std::uint32_t type) noexcept {
     return type >= KernelServices::kMutexTypeErrorCheck &&
            type <= KernelServices::kMutexTypeAdaptive;
@@ -345,7 +377,7 @@ std::int64_t KernelServices::open_readonly(GuestAddress path_address, std::uint3
             return error(kErrorEacces);
         }
 
-        auto record = std::make_shared<FileRecord>(std::move(stream));
+        auto record = std::make_shared<FileRecord>(std::move(stream), host_path);
         std::scoped_lock lock(files_mutex_);
         for (std::size_t attempts = 0;
              attempts < static_cast<std::size_t>(std::numeric_limits<int>::max()); ++attempts) {
@@ -414,6 +446,135 @@ std::int64_t KernelServices::read(int fd, GuestAddress buffer, GuestSize size) {
         }
     }
     return static_cast<std::int64_t>(total);
+}
+
+std::int64_t KernelServices::seek(int fd, std::int64_t offset, int whence) {
+    std::shared_ptr<FileRecord> record;
+    {
+        std::scoped_lock lock(files_mutex_);
+        const auto it = files_.find(fd);
+        if (it == files_.end()) {
+            return error(kErrorEbadf);
+        }
+        record = it->second;
+    }
+
+    std::ios_base::seekdir origin{};
+    switch (whence) {
+    case 0:
+        origin = std::ios::beg;
+        break;
+    case 1:
+        origin = std::ios::cur;
+        break;
+    case 2:
+        origin = std::ios::end;
+        break;
+    case 3:
+    case 4:
+        return error(kErrorEnotty);
+    default:
+        return error(kErrorEinval);
+    }
+    if (offset < static_cast<std::int64_t>(std::numeric_limits<std::streamoff>::min()) ||
+        offset > static_cast<std::int64_t>(std::numeric_limits<std::streamoff>::max())) {
+        return error(kErrorEinval);
+    }
+
+    std::scoped_lock lock(record->mutex);
+    record->file.clear();
+    record->file.seekg(static_cast<std::streamoff>(offset), origin);
+    if (!record->file) {
+        record->file.clear();
+        return error(kErrorEinval);
+    }
+    const auto position = record->file.tellg();
+    if (position == std::streampos{-1}) {
+        record->file.clear();
+        return error(kErrorEinval);
+    }
+    const auto stream_offset = static_cast<std::streamoff>(position);
+    if (stream_offset < 0) {
+        return error(kErrorEinval);
+    }
+    return static_cast<std::int64_t>(stream_offset);
+}
+
+std::int64_t KernelServices::write_file_stat(const std::filesystem::path& path,
+                                             GuestAddress stat_address) {
+    if (!guest_writable(stat_address, sizeof(GuestFileStat))) {
+        return error(kErrorEfault);
+    }
+
+    std::error_code fs_error;
+    const auto status = std::filesystem::status(path, fs_error);
+    if (fs_error || !std::filesystem::exists(status)) {
+        return error(kErrorEnoent);
+    }
+
+    GuestFileStat stat{};
+    stat.link_count = 1;
+    stat.block_size = 512;
+    if (std::filesystem::is_regular_file(status)) {
+        stat.mode = static_cast<std::uint16_t>(kModeRegular | kModePermissions);
+        const auto file_size = std::filesystem::file_size(path, fs_error);
+        if (fs_error || file_size > static_cast<std::uintmax_t>(std::numeric_limits<std::int64_t>::max())) {
+            return error(kErrorEinval);
+        }
+        stat.size = static_cast<std::int64_t>(file_size);
+        stat.blocks = (stat.size + 511) / 512;
+    } else if (std::filesystem::is_directory(status)) {
+        stat.mode = static_cast<std::uint16_t>(kModeDirectory | kModePermissions);
+        stat.size = 65'536;
+        stat.block_size = 65'536;
+        stat.blocks = 128;
+    } else {
+        return error(kErrorEnoent);
+    }
+
+    fs_error.clear();
+    const auto write_time = std::filesystem::last_write_time(path, fs_error);
+    if (!fs_error) {
+        const auto system_time = std::filesystem::file_time_type::clock::to_sys(write_time);
+        split_duration(system_time.time_since_epoch(), stat.modification_time.seconds,
+                       stat.modification_time.nanoseconds);
+    }
+
+    const auto bytes = std::span<const std::byte>(reinterpret_cast<const std::byte*>(&stat), sizeof(stat));
+    return memory_.write(stat_address, bytes) ? 0 : error(kErrorEfault);
+}
+
+std::int64_t KernelServices::stat_path(GuestAddress path_address, GuestAddress stat_address) {
+    if (guest_root_.empty()) {
+        return error(kErrorEacces);
+    }
+    try {
+        std::string guest_path;
+        if (!read_guest_c_string(path_address, guest_path)) {
+            return error(kErrorEfault);
+        }
+        bool allowed = false;
+        const auto host_path = resolve_guest_path(guest_path, allowed);
+        if (!allowed) {
+            return error(kErrorEnoent);
+        }
+        return write_file_stat(host_path, stat_address);
+    } catch (const std::bad_alloc&) {
+        return error(kErrorEnomem);
+    }
+}
+
+std::int64_t KernelServices::fstat(int fd, GuestAddress stat_address) {
+    std::shared_ptr<FileRecord> record;
+    {
+        std::scoped_lock lock(files_mutex_);
+        const auto it = files_.find(fd);
+        if (it == files_.end()) {
+            return error(kErrorEbadf);
+        }
+        record = it->second;
+    }
+    return write_file_stat(record->path, stat_address);
 }
 
 std::int64_t KernelServices::close(int fd) {

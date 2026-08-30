@@ -26,6 +26,17 @@ std::uint64_t posix_result(int error) {
     return error == 0 ? 0 : posix_failure(error);
 }
 
+std::uint64_t posix_file_result(std::int64_t result) {
+    if (result >= 0) {
+        return static_cast<std::uint64_t>(result);
+    }
+    const auto encoded = static_cast<std::uint32_t>(result);
+    if ((encoded & 0xffff0000U) != 0x80020000U) {
+        return posix_failure(runtime::KernelServices::kPosixEinval);
+    }
+    return posix_failure(static_cast<int>(encoded - 0x80020000U));
+}
+
 std::uint64_t process_time_us() {
     const auto elapsed = Clock::now() - process_start;
     return static_cast<std::uint64_t>(
@@ -109,6 +120,90 @@ std::uint64_t kernel_close(std::uint64_t fd) {
         return kernel_error_result(runtime::KernelServices::kErrorEbadf);
     }
     return signed_result(services->close(static_cast<int>(static_cast<std::int32_t>(fd))));
+}
+
+std::uint64_t posix_open(std::uint64_t path, std::uint64_t flags, std::uint64_t mode) {
+    auto* services = kernel_services();
+    if (services == nullptr) {
+        return posix_failure(runtime::KernelServices::kPosixEinval);
+    }
+    return posix_file_result(services->open_readonly(static_cast<GuestAddress>(path),
+                                                     static_cast<std::uint32_t>(flags),
+                                                     static_cast<std::uint16_t>(mode)));
+}
+
+std::uint64_t posix_read(std::uint64_t fd, std::uint64_t buffer, std::uint64_t size) {
+    auto* services = kernel_services();
+    if (services == nullptr) {
+        return posix_failure(runtime::KernelServices::kPosixEbadf);
+    }
+    return posix_file_result(services->read(static_cast<int>(static_cast<std::int32_t>(fd)),
+                                            static_cast<GuestAddress>(buffer),
+                                            static_cast<GuestSize>(size)));
+}
+
+std::uint64_t posix_close(std::uint64_t fd) {
+    auto* services = kernel_services();
+    if (services == nullptr) {
+        return posix_failure(runtime::KernelServices::kPosixEbadf);
+    }
+    return posix_file_result(services->close(static_cast<int>(static_cast<std::int32_t>(fd))));
+}
+
+std::uint64_t posix_lseek(std::uint64_t fd, std::uint64_t offset, std::uint64_t whence) {
+    auto* services = kernel_services();
+    if (services == nullptr) {
+        return posix_failure(runtime::KernelServices::kPosixEbadf);
+    }
+    return posix_file_result(services->seek(static_cast<int>(static_cast<std::int32_t>(fd)),
+                                            static_cast<std::int64_t>(offset),
+                                            static_cast<int>(static_cast<std::int32_t>(whence))));
+}
+
+std::uint64_t kernel_lseek(std::uint64_t fd, std::uint64_t offset, std::uint64_t whence) {
+    auto* services = kernel_services();
+    if (services == nullptr) {
+        return kernel_error_result(runtime::KernelServices::kErrorEbadf);
+    }
+    return signed_result(services->seek(static_cast<int>(static_cast<std::int32_t>(fd)),
+                                        static_cast<std::int64_t>(offset),
+                                        static_cast<int>(static_cast<std::int32_t>(whence))));
+}
+
+std::uint64_t posix_stat(std::uint64_t path, std::uint64_t stat) {
+    auto* services = kernel_services();
+    if (services == nullptr) {
+        return posix_failure(runtime::KernelServices::kPosixEinval);
+    }
+    return posix_file_result(services->stat_path(static_cast<GuestAddress>(path),
+                                                 static_cast<GuestAddress>(stat)));
+}
+
+std::uint64_t kernel_stat(std::uint64_t path, std::uint64_t stat) {
+    auto* services = kernel_services();
+    if (services == nullptr) {
+        return kernel_error_result(runtime::KernelServices::kErrorEinval);
+    }
+    return signed_result(services->stat_path(static_cast<GuestAddress>(path),
+                                             static_cast<GuestAddress>(stat)));
+}
+
+std::uint64_t posix_fstat(std::uint64_t fd, std::uint64_t stat) {
+    auto* services = kernel_services();
+    if (services == nullptr) {
+        return posix_failure(runtime::KernelServices::kPosixEbadf);
+    }
+    return posix_file_result(services->fstat(static_cast<int>(static_cast<std::int32_t>(fd)),
+                                             static_cast<GuestAddress>(stat)));
+}
+
+std::uint64_t kernel_fstat(std::uint64_t fd, std::uint64_t stat) {
+    auto* services = kernel_services();
+    if (services == nullptr) {
+        return kernel_error_result(runtime::KernelServices::kErrorEbadf);
+    }
+    return signed_result(services->fstat(static_cast<int>(static_cast<std::int32_t>(fd)),
+                                         static_cast<GuestAddress>(stat)));
 }
 
 std::uint64_t mutex_attr_init(std::uint64_t attribute) {
@@ -747,6 +842,33 @@ void register_core(runtime::HleRegistry& registry) {
     (void)registry.register_function(key("UK2Tl2DWUns"),
                                      reinterpret_cast<GuestAddress>(&kernel_close),
                                      "sceKernelClose");
+
+    const auto posix_open_address = reinterpret_cast<GuestAddress>(&posix_open);
+    const auto posix_read_address = reinterpret_cast<GuestAddress>(&posix_read);
+    const auto posix_close_address = reinterpret_cast<GuestAddress>(&posix_close);
+    const auto posix_lseek_address = reinterpret_cast<GuestAddress>(&posix_lseek);
+    const auto posix_stat_address = reinterpret_cast<GuestAddress>(&posix_stat);
+    const auto posix_fstat_address = reinterpret_cast<GuestAddress>(&posix_fstat);
+    for (const char* library : {"libkernel", "libScePosix"}) {
+        (void)registry.register_function(key("wuCroIGjt2g", library), posix_open_address, "open");
+        (void)registry.register_function(key("AqBioC2vF3I", library), posix_read_address, "read");
+        (void)registry.register_function(key("bY-PO6JhzhQ", library), posix_close_address, "close");
+        (void)registry.register_function(key("Oy6IpwgtYOk", library), posix_lseek_address, "lseek");
+        (void)registry.register_function(key("E6ao34wPw+U", library), posix_stat_address, "stat");
+        (void)registry.register_function(key("mqQMh1zPPT8", library), posix_fstat_address, "fstat");
+    }
+    (void)registry.register_function(key("6c3rCVE-fTU"), posix_open_address, "open");
+    (void)registry.register_function(key("DRuBt2pvICk"), posix_read_address, "read");
+    (void)registry.register_function(key("NNtFaKJbPt0"), posix_close_address, "close");
+    (void)registry.register_function(key("oib76F-12fk"),
+                                     reinterpret_cast<GuestAddress>(&kernel_lseek),
+                                     "sceKernelLseek");
+    (void)registry.register_function(key("eV9wAD2riIA"),
+                                     reinterpret_cast<GuestAddress>(&kernel_stat),
+                                     "sceKernelStat");
+    (void)registry.register_function(key("kBwCPsYX-m4"),
+                                     reinterpret_cast<GuestAddress>(&kernel_fstat),
+                                     "sceKernelFstat");
 
     const auto sem_init_address = reinterpret_cast<GuestAddress>(&posix_sem_init);
     const auto sem_destroy_address = reinterpret_cast<GuestAddress>(&posix_sem_destroy);

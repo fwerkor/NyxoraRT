@@ -26,12 +26,15 @@ public:
     static constexpr std::uint32_t kErrorEacces = 0x8002000dU;
     static constexpr std::uint32_t kErrorEfault = 0x8002000eU;
     static constexpr std::uint32_t kErrorEinval = 0x80020016U;
+    static constexpr std::uint32_t kErrorEnotty = 0x80020019U;
 
     static constexpr int kPosixEperm = 1;
+    static constexpr int kPosixEbadf = 9;
     static constexpr int kPosixEdeadlk = 11;
     static constexpr int kPosixEnomem = 12;
     static constexpr int kPosixEbusy = 16;
     static constexpr int kPosixEinval = 22;
+    static constexpr int kPosixEnotty = 25;
     static constexpr int kPosixEtimedout = 60;
     static constexpr int kPosixEagain = 35;
     static constexpr int kPosixEoverflow = 84;
@@ -47,6 +50,9 @@ public:
     [[nodiscard]] std::int64_t open_readonly(GuestAddress path_address, std::uint32_t flags,
                                              std::uint16_t mode);
     [[nodiscard]] std::int64_t read(int fd, GuestAddress buffer, GuestSize size);
+    [[nodiscard]] std::int64_t seek(int fd, std::int64_t offset, int whence);
+    [[nodiscard]] std::int64_t stat_path(GuestAddress path_address, GuestAddress stat_address);
+    [[nodiscard]] std::int64_t fstat(int fd, GuestAddress stat_address);
     [[nodiscard]] std::int64_t close(int fd);
 
     struct ThreadAttributes {
@@ -119,9 +125,11 @@ public:
 
 private:
     struct FileRecord {
-        explicit FileRecord(std::ifstream file_in) : file(std::move(file_in)) {}
+        FileRecord(std::ifstream file_in, std::filesystem::path path_in)
+            : file(std::move(file_in)), path(std::move(path_in)) {}
         std::mutex mutex;
         std::ifstream file;
+        std::filesystem::path path;
     };
 
     struct MutexAttributes {
@@ -190,6 +198,8 @@ private:
     [[nodiscard]] bool guest_writable(GuestAddress address, GuestSize size) const noexcept;
     [[nodiscard]] std::filesystem::path resolve_guest_path(const std::string& guest_path,
                                                            bool& allowed) const;
+    [[nodiscard]] std::int64_t write_file_stat(const std::filesystem::path& path,
+                                               GuestAddress stat_address);
     [[nodiscard]] int mutex_attr_snapshot(GuestAddress slot_address, MutexAttributes& attributes) const;
     [[nodiscard]] std::uint64_t allocate_mutex_attr_handle_locked();
     [[nodiscard]] std::shared_ptr<MutexRecord> mutex_for_slot_locked(GuestAddress slot_address,
