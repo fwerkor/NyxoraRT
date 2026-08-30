@@ -164,6 +164,48 @@ std::chrono::nanoseconds relative_timeout(std::uint64_t microseconds) {
         std::chrono::microseconds(microseconds));
 }
 
+bool file_modification_time(const std::filesystem::path& path, std::int64_t& seconds,
+                            std::int64_t& nanoseconds) {
+#if defined(_WIN32)
+    WIN32_FILE_ATTRIBUTE_DATA attributes{};
+    if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &attributes)) {
+        return false;
+    }
+    ULARGE_INTEGER ticks{};
+    ticks.LowPart = attributes.ftLastWriteTime.dwLowDateTime;
+    ticks.HighPart = attributes.ftLastWriteTime.dwHighDateTime;
+    constexpr std::uint64_t ticks_per_second = 10'000'000ULL;
+    constexpr std::uint64_t unix_epoch_ticks = 116'444'736'000'000'000ULL;
+    if (ticks.QuadPart >= unix_epoch_ticks) {
+        const auto elapsed = ticks.QuadPart - unix_epoch_ticks;
+        seconds = static_cast<std::int64_t>(elapsed / ticks_per_second);
+        nanoseconds = static_cast<std::int64_t>((elapsed % ticks_per_second) * 100ULL);
+        return true;
+    }
+
+    const auto before_epoch = unix_epoch_ticks - ticks.QuadPart;
+    const auto whole_seconds = before_epoch / ticks_per_second;
+    const auto remainder = before_epoch % ticks_per_second;
+    if (remainder == 0) {
+        seconds = -static_cast<std::int64_t>(whole_seconds);
+        nanoseconds = 0;
+    } else {
+        seconds = -static_cast<std::int64_t>(whole_seconds) - 1;
+        nanoseconds = static_cast<std::int64_t>((ticks_per_second - remainder) * 100ULL);
+    }
+    return true;
+#else
+    std::error_code error;
+    const auto write_time = std::filesystem::last_write_time(path, error);
+    if (error) {
+        return false;
+    }
+    const auto system_time = std::filesystem::file_time_type::clock::to_sys(write_time);
+    split_duration(system_time.time_since_epoch(), seconds, nanoseconds);
+    return true;
+#endif
+}
+
 bool path_is_within(const std::filesystem::path& root, const std::filesystem::path& path) {
     auto root_it = root.begin();
     auto path_it = path.begin();
@@ -532,13 +574,8 @@ std::int64_t KernelServices::write_file_stat(const std::filesystem::path& path,
         return error(kErrorEnoent);
     }
 
-    fs_error.clear();
-    const auto write_time = std::filesystem::last_write_time(path, fs_error);
-    if (!fs_error) {
-        const auto system_time = std::filesystem::file_time_type::clock::to_sys(write_time);
-        split_duration(system_time.time_since_epoch(), stat.modification_time.seconds,
-                       stat.modification_time.nanoseconds);
-    }
+    (void)file_modification_time(path, stat.modification_time.seconds,
+                                 stat.modification_time.nanoseconds);
 
     const auto bytes = std::span<const std::byte>(reinterpret_cast<const std::byte*>(&stat), sizeof(stat));
     return memory_.write(stat_address, bytes) ? 0 : error(kErrorEfault);
