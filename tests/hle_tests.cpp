@@ -46,6 +46,77 @@ void emit_mov_imm64(std::span<std::byte> output, std::size_t& at, std::byte opco
     at += sizeof(value);
 }
 
+std::uint64_t invoke_guest_sysv_call(nyxora::GuestAddress target,
+                                     std::span<const std::uint64_t> arguments) {
+#if defined(__x86_64__) || defined(_M_X64)
+    NYXORA_CHECK(target != 0);
+    NYXORA_CHECK(arguments.size() <= 7);
+    const auto page = nyxora::memory::NativeArena::page_size();
+    auto code = nyxora::memory::NativeArena::reserve(page);
+    NYXORA_CHECK(code.has_value());
+    NYXORA_CHECK(code->protect(0, page,
+                               nyxora::memory::Protection::read |
+                                   nyxora::memory::Protection::write));
+    std::array<std::byte, 160> guest_code{};
+    guest_code.fill(std::byte{0x90});
+    std::size_t at = 0;
+    const std::array<std::byte, 4> low_opcodes{
+        std::byte{0xbf}, std::byte{0xbe}, std::byte{0xba}, std::byte{0xb9}};
+    for (std::size_t index = 0; index < std::min<std::size_t>(arguments.size(), 4); ++index) {
+        emit_mov_imm64(guest_code, at, low_opcodes[index], arguments[index]);
+    }
+    if (arguments.size() > 4) {
+        guest_code[at++] = std::byte{0x49};
+        guest_code[at++] = std::byte{0xb8};
+        std::memcpy(guest_code.data() + at, &arguments[4], sizeof(arguments[4]));
+        at += sizeof(arguments[4]);
+    }
+    if (arguments.size() > 5) {
+        guest_code[at++] = std::byte{0x49};
+        guest_code[at++] = std::byte{0xb9};
+        std::memcpy(guest_code.data() + at, &arguments[5], sizeof(arguments[5]));
+        at += sizeof(arguments[5]);
+    }
+    const std::uint64_t stack_argument = arguments.size() > 6 ? arguments[6] : 0;
+    emit_mov_imm64(guest_code, at, std::byte{0xb8}, stack_argument);
+    guest_code[at++] = std::byte{0x48};
+    guest_code[at++] = std::byte{0x83};
+    guest_code[at++] = std::byte{0xec};
+    guest_code[at++] = std::byte{0x08};
+    guest_code[at++] = std::byte{0x48};
+    guest_code[at++] = std::byte{0x89};
+    guest_code[at++] = std::byte{0x04};
+    guest_code[at++] = std::byte{0x24};
+    guest_code[at++] = std::byte{0x49};
+    guest_code[at++] = std::byte{0xbb};
+    std::memcpy(guest_code.data() + at, &target, sizeof(target));
+    at += sizeof(target);
+    guest_code[at++] = std::byte{0x41};
+    guest_code[at++] = std::byte{0xff};
+    guest_code[at++] = std::byte{0xd3};
+    guest_code[at++] = std::byte{0x48};
+    guest_code[at++] = std::byte{0x83};
+    guest_code[at++] = std::byte{0xc4};
+    guest_code[at++] = std::byte{0x08};
+    guest_code[at++] = std::byte{0xc3};
+    NYXORA_CHECK(code->copy(0, std::span<const std::byte>(guest_code.data(), at)));
+    NYXORA_CHECK(code->flush_instruction_cache(0, at));
+    NYXORA_CHECK(code->protect(0, page,
+                               nyxora::memory::Protection::read |
+                                   nyxora::memory::Protection::execute));
+    auto stack = nyxora::runtime::GuestStack::create(64 * 1024);
+    auto trampoline = nyxora::runtime::EntryTrampoline::create();
+    NYXORA_CHECK(stack.has_value());
+    NYXORA_CHECK(trampoline.has_value());
+    return trampoline->invoke(reinterpret_cast<nyxora::GuestAddress>(code->host_pointer()),
+                              stack->top());
+#else
+    (void)target;
+    (void)arguments;
+    return 0;
+#endif
+}
+
 nyxora::runtime::SymbolKey libkernel_key(const char* nid) {
     return nyxora::runtime::SymbolKey{
         .nid = nid,
@@ -109,6 +180,12 @@ namespace {
 std::uint64_t hle_sum_four(std::uint64_t a, std::uint64_t b, std::uint64_t c, std::uint64_t d) {
     return a + b * 10U + c * 100U + d * 1000U;
 }
+
+std::uint64_t hle_sum_seven(std::uint64_t a, std::uint64_t b, std::uint64_t c, std::uint64_t d,
+                            std::uint64_t e, std::uint64_t f, std::uint64_t g) {
+    return a + b * 10U + c * 100U + d * 1000U + e * 10'000U + f * 100'000U +
+           g * 1'000'000U;
+}
 }
 
 NYXORA_TEST(hle_four_register_bridge_is_guest_callable) {
@@ -170,6 +247,29 @@ NYXORA_TEST(hle_four_register_bridge_is_guest_callable) {
     NYXORA_CHECK(result == 4321);
 #endif
 }
+
+NYXORA_TEST(hle_seven_argument_bridge_is_guest_callable) {
+#if defined(__x86_64__) || defined(_M_X64)
+    nyxora::runtime::SymbolRegistry symbols;
+    nyxora::runtime::HleRegistry registry(symbols);
+    nyxora::runtime::SymbolKey key{
+        .nid = "sum7",
+        .library = "test",
+        .module = "test",
+        .library_version = 1,
+        .module_major = 1,
+        .module_minor = 0,
+        .kind = nyxora::runtime::SymbolKind::function,
+    };
+    NYXORA_CHECK(registry.register_function(
+        key, reinterpret_cast<nyxora::GuestAddress>(&hle_sum_seven), "sum7"));
+    const auto binding = symbols.resolve(key);
+    NYXORA_CHECK(binding.has_value());
+    const std::array<std::uint64_t, 7> arguments{1, 2, 3, 4, 5, 6, 7};
+    NYXORA_CHECK(invoke_guest_sysv_call(binding->address, arguments) == 7'654'321ULL);
+#endif
+}
+
 
 NYXORA_TEST(libkernel_pthread_create_and_join_work_through_guest_hle_calls) {
 #if defined(__x86_64__) || defined(_M_X64)

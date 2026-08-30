@@ -63,7 +63,7 @@ public:
     }
 
 private:
-    static constexpr std::size_t kThunkSize = 64;
+    static constexpr std::size_t kThunkSize = 128;
 
 #if defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
     BridgeTable(memory::NativeArena arena, std::size_t capacity, GuestSize data_offset)
@@ -98,14 +98,20 @@ private:
 
             const std::byte save_guest_stack[] = {
                 std::byte{0x41}, std::byte{0x54},                                           // push r12
+                std::byte{0x41}, std::byte{0x55},                                           // push r13
+                std::byte{0x41}, std::byte{0x56},                                           // push r14
                 std::byte{0x4c}, std::byte{0x8d}, std::byte{0x64}, std::byte{0x24},
-                std::byte{0x08},                                                           // lea r12,[rsp+8]
+                std::byte{0x18},                                                           // lea r12,[rsp+0x18]
+                std::byte{0x4d}, std::byte{0x89}, std::byte{0xc5},                         // mov r13,r8
+                std::byte{0x4d}, std::byte{0x89}, std::byte{0xce},                         // mov r14,r9
                 std::byte{0x49}, std::byte{0x89}, std::byte{0xd2},                         // mov r10,rdx
                 std::byte{0x49}, std::byte{0x89}, std::byte{0xcb},                         // mov r11,rcx
                 std::byte{0x48}, std::byte{0x89}, std::byte{0xf9},                         // mov rcx,rdi
                 std::byte{0x48}, std::byte{0x89}, std::byte{0xf2},                         // mov rdx,rsi
                 std::byte{0x4d}, std::byte{0x89}, std::byte{0xd0},                         // mov r8,r10
                 std::byte{0x4d}, std::byte{0x89}, std::byte{0xd9},                         // mov r9,r11
+                std::byte{0x4d}, std::byte{0x8b}, std::byte{0x54}, std::byte{0x24},
+                std::byte{0x08},                                                           // mov r10,[r12+8]
                 std::byte{0x65}, std::byte{0x4c}, std::byte{0x8b}, std::byte{0x1c},
                 std::byte{0x25},                                                           // mov r11,gs:[disp32]
             };
@@ -114,7 +120,13 @@ private:
             }
             const std::byte switch_host_stack[] = {
                 std::byte{0x4c}, std::byte{0x89}, std::byte{0xdc},                         // mov rsp,r11
-                std::byte{0x48}, std::byte{0x83}, std::byte{0xec}, std::byte{0x28},       // sub rsp,0x28
+                std::byte{0x48}, std::byte{0x83}, std::byte{0xec}, std::byte{0x38},       // shadow + args 4-6
+                std::byte{0x4c}, std::byte{0x89}, std::byte{0x6c}, std::byte{0x24},
+                std::byte{0x20},                                                           // mov [rsp+0x20],r13
+                std::byte{0x4c}, std::byte{0x89}, std::byte{0x74}, std::byte{0x24},
+                std::byte{0x28},                                                           // mov [rsp+0x28],r14
+                std::byte{0x4c}, std::byte{0x89}, std::byte{0x54}, std::byte{0x24},
+                std::byte{0x30},                                                           // mov [rsp+0x30],r10
                 std::byte{0x48}, std::byte{0x8b}, std::byte{0x05},                         // mov rax,[rip+rel32]
             };
             if (!append(switch_host_stack)) {
@@ -134,7 +146,9 @@ private:
             const std::byte finish[] = {
                 std::byte{0xff}, std::byte{0xd0},                                           // call rax
                 std::byte{0x4c}, std::byte{0x89}, std::byte{0xe4},                         // mov rsp,r12
-                std::byte{0x48}, std::byte{0x83}, std::byte{0xec}, std::byte{0x08},       // sub rsp,8
+                std::byte{0x48}, std::byte{0x83}, std::byte{0xec}, std::byte{0x18},       // reach saved regs
+                std::byte{0x41}, std::byte{0x5e},                                           // pop r14
+                std::byte{0x41}, std::byte{0x5d},                                           // pop r13
                 std::byte{0x41}, std::byte{0x5c},                                           // pop r12
                 std::byte{0xc3},                                                             // ret
             };
