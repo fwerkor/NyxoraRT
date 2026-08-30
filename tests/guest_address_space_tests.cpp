@@ -41,3 +41,48 @@ NYXORA_TEST(guest_address_space_protect_range_splits_region_and_preserves_bytes)
     NYXORA_CHECK(!memory.write(base + page + 8, marker));
     NYXORA_CHECK(memory.write(base + page * 2 + 8, marker));
 }
+
+
+NYXORA_TEST(guest_address_space_unmap_range_splits_regions_and_tolerates_holes) {
+    using nyxora::memory::Protection;
+    nyxora::memory::GuestAddressSpace memory;
+    constexpr nyxora::GuestAddress base = 0x10000;
+    constexpr nyxora::GuestSize page = 0x1000;
+    NYXORA_CHECK(memory.map(base, page * 3, Protection::read | Protection::write, "first"));
+    NYXORA_CHECK(memory.map(base + page * 4, page * 2,
+                            Protection::read | Protection::write, "second"));
+    const std::array<std::byte, 1> left{std::byte{0x11}};
+    const std::array<std::byte, 1> right{std::byte{0x22}};
+    NYXORA_CHECK(memory.write(base, left));
+    NYXORA_CHECK(memory.write(base + page * 5, right));
+
+    NYXORA_CHECK(memory.unmap_range(base + page, page * 4));
+    const auto regions = memory.regions();
+    NYXORA_CHECK(regions.size() == 2);
+    NYXORA_CHECK(regions[0].base == base);
+    NYXORA_CHECK(regions[0].size == page);
+    NYXORA_CHECK(regions[1].base == base + page * 5);
+    NYXORA_CHECK(regions[1].size == page);
+    NYXORA_CHECK(memory.find(base + page) == nullptr);
+    NYXORA_CHECK(memory.find(base + page * 4) == nullptr);
+    NYXORA_CHECK(memory.view(base, 1)[0] == left[0]);
+    NYXORA_CHECK(memory.view(base + page * 5, 1)[0] == right[0]);
+    NYXORA_CHECK(memory.unmap_range(base + page * 2, page));
+}
+
+NYXORA_TEST(native_guest_address_space_unmap_range_releases_subrange_for_reuse) {
+    using nyxora::memory::Protection;
+    const auto page = static_cast<nyxora::GuestSize>(nyxora::memory::NativeArena::page_size());
+    auto memory = nyxora::memory::GuestAddressSpace::reserve_native(page * 4);
+    NYXORA_CHECK(memory.has_value());
+    const auto base = memory->native_base();
+    NYXORA_CHECK(memory->map(base, page * 3, Protection::read | Protection::write, "native"));
+    NYXORA_CHECK(memory->unmap_range(base + page, page));
+    NYXORA_CHECK(memory->find(base) != nullptr);
+    NYXORA_CHECK(memory->find(base + page) == nullptr);
+    NYXORA_CHECK(memory->find(base + page * 2) != nullptr);
+    NYXORA_CHECK(memory->map(base + page, page, Protection::read | Protection::write, "reused"));
+    const std::array<std::byte, 1> value{std::byte{0x5a}};
+    NYXORA_CHECK(memory->write(base + page, value));
+    NYXORA_CHECK(memory->view(base + page, 1)[0] == value[0]);
+}

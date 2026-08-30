@@ -82,6 +82,103 @@ bool GuestAddressSpace::unmap(GuestAddress base, GuestSize size) {
     return true;
 }
 
+bool GuestAddressSpace::unmap_range(GuestAddress base, GuestSize size) {
+    GuestAddress end{};
+    if (!end_address(base, size, end)) {
+        return false;
+    }
+
+    struct Removal {
+        GuestAddress region_base{};
+        GuestAddress overlap_base{};
+        GuestSize overlap_size{};
+        Protection protection{Protection::none};
+    };
+    std::vector<Removal> removals;
+    std::map<GuestAddress, Region> prepared;
+
+    auto prepare_overlap = [&](const Region& original, GuestAddress overlap_base,
+                               GuestAddress overlap_end) {
+        removals.push_back(Removal{original.info.base, overlap_base,
+                                   overlap_end - overlap_base, original.info.protection});
+        const auto original_end = original.info.base + original.info.size;
+        if (overlap_base > original.info.base) {
+            Region before;
+            before.info = RegionInfo{original.info.base, overlap_base - original.info.base,
+                                     original.info.protection, original.info.name};
+            if (!native_) {
+                before.storage.assign(original.storage.begin(),
+                                      original.storage.begin() +
+                                          static_cast<std::ptrdiff_t>(before.info.size));
+            }
+            prepared.emplace(before.info.base, std::move(before));
+        }
+        if (overlap_end < original_end) {
+            Region after;
+            after.info = RegionInfo{overlap_end, original_end - overlap_end,
+                                    original.info.protection, original.info.name};
+            if (!native_) {
+                const auto storage_offset = overlap_end - original.info.base;
+                after.storage.assign(
+                    original.storage.begin() + static_cast<std::ptrdiff_t>(storage_offset),
+                    original.storage.end());
+            }
+            prepared.emplace(after.info.base, std::move(after));
+        }
+    };
+
+    try {
+        auto containing = find_region(base);
+        if (containing != regions_.end() && containing->first < base) {
+            const auto& original = containing->second;
+            const auto overlap_end = std::min(end, original.info.base + original.info.size);
+            if (base < overlap_end) {
+                prepare_overlap(original, base, overlap_end);
+            }
+        }
+        for (auto it = regions_.lower_bound(base); it != regions_.end() && it->first < end; ++it) {
+            const auto& original = it->second;
+            const auto overlap_base = std::max(base, original.info.base);
+            const auto overlap_end = std::min(end, original.info.base + original.info.size);
+            if (overlap_base < overlap_end) {
+                prepare_overlap(original, overlap_base, overlap_end);
+            }
+        }
+    } catch (const std::bad_alloc&) {
+        return false;
+    }
+
+    if (native_) {
+        const auto page = static_cast<GuestSize>(NativeArena::page_size());
+        for (const auto& removal : removals) {
+            const auto offset = native_offset(removal.overlap_base);
+            if (!offset || removal.overlap_base % page != 0 || removal.overlap_size % page != 0) {
+                return false;
+            }
+        }
+        std::size_t applied = 0;
+        for (; applied < removals.size(); ++applied) {
+            const auto& removal = removals[applied];
+            const auto offset = *native_offset(removal.overlap_base);
+            if (!native_->protect(offset, removal.overlap_size, Protection::none)) {
+                while (applied != 0) {
+                    --applied;
+                    const auto& restore = removals[applied];
+                    const auto restore_offset = *native_offset(restore.overlap_base);
+                    (void)native_->protect(restore_offset, restore.overlap_size, restore.protection);
+                }
+                return false;
+            }
+        }
+    }
+
+    for (const auto& removal : removals) {
+        regions_.erase(removal.region_base);
+    }
+    regions_.merge(prepared);
+    return true;
+}
+
 bool GuestAddressSpace::protect(GuestAddress base, GuestSize size, Protection protection) {
     const auto it = regions_.find(base);
     if (it == regions_.end() || it->second.info.size != size) {
