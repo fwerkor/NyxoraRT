@@ -241,30 +241,6 @@ NYXORA_TEST(libkernel_pthread_create_and_join_work_through_guest_hle_calls) {
     NYXORA_CHECK(code->copy(create_offset,
                             std::span<const std::byte>(create_code.data(), create_at)));
 
-    std::array<std::byte, 48> join_code{};
-    join_code.fill(std::byte{0x90});
-    std::size_t join_at = 0;
-    // The handle value is filled after pthread_create returns.
-    const auto handle_immediate_offset = join_at + 2;
-    emit_mov_imm64(join_code, join_at, std::byte{0xbf}, 0); // rdi = handle
-    emit_mov_imm64(join_code, join_at, std::byte{0xbe},
-                   reinterpret_cast<std::uint64_t>(&child_result));
-    emit_mov_imm64(join_code, join_at, std::byte{0xb8}, join_binding->address);
-    NYXORA_CHECK(join_code.size() - join_at >= 11);
-    join_code[join_at++] = std::byte{0x48};
-    join_code[join_at++] = std::byte{0x83};
-    join_code[join_at++] = std::byte{0xec};
-    join_code[join_at++] = std::byte{0x08}; // sub rsp,8
-    join_code[join_at++] = std::byte{0xff};
-    join_code[join_at++] = std::byte{0xd0};
-    join_code[join_at++] = std::byte{0x48};
-    join_code[join_at++] = std::byte{0x83};
-    join_code[join_at++] = std::byte{0xc4};
-    join_code[join_at++] = std::byte{0x08}; // add rsp,8
-    join_code[join_at++] = std::byte{0xc3};
-    constexpr std::size_t join_offset = 0x200;
-    NYXORA_CHECK(code->copy(join_offset,
-                            std::span<const std::byte>(join_code.data(), join_at)));
     NYXORA_CHECK(code->flush_instruction_cache(0, page));
     NYXORA_CHECK(code->protect(0, page,
                                nyxora::memory::Protection::read |
@@ -282,19 +258,9 @@ NYXORA_TEST(libkernel_pthread_create_and_join_work_through_guest_hle_calls) {
     NYXORA_CHECK(handle != 0);
     NYXORA_CHECK(manager.size() == 1);
 
-    NYXORA_CHECK(code->protect(0, page,
-                               nyxora::memory::Protection::read |
-                                   nyxora::memory::Protection::write));
-    NYXORA_CHECK(code->copy(join_offset + handle_immediate_offset,
-                            std::span<const std::byte>(
-                                reinterpret_cast<const std::byte*>(&handle), sizeof(handle))));
-    NYXORA_CHECK(code->flush_instruction_cache(join_offset, join_at));
-    NYXORA_CHECK(code->protect(0, page,
-                               nyxora::memory::Protection::read |
-                                   nyxora::memory::Protection::execute));
-
     const auto join_result = trampoline->invoke(
-        reinterpret_cast<nyxora::GuestAddress>(code->host_pointer(join_offset)), stack->top());
+        join_binding->address, stack->top(), handle,
+        reinterpret_cast<nyxora::GuestAddress>(&child_result));
     NYXORA_CHECK(join_result == 0);
     NYXORA_CHECK(child_result == handle);
     NYXORA_CHECK(manager.size() == 0);
