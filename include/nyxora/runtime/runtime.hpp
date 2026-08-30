@@ -77,6 +77,9 @@ public:
     [[nodiscard]] bool set_guest_root(const std::filesystem::path& root) {
         return kernel_services_.set_guest_root(root);
     }
+    [[nodiscard]] bool set_flexible_memory_size(GuestSize size) {
+        return kernel_services_.set_flexible_memory_size(size);
+    }
 
 private:
     memory::GuestAddressSpace memory_;

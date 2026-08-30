@@ -160,7 +160,7 @@ NYXORA_TEST(libkernel_core_registers_process_time_and_cpu_hle) {
     nyxora::runtime::SymbolRegistry symbols;
     nyxora::runtime::HleRegistry hle(symbols);
     nyxora::hle::libkernel::register_core(hle);
-    NYXORA_CHECK(hle.size() == 174);
+    NYXORA_CHECK(hle.size() == 189);
 
     const auto frequency = symbols.resolve(libkernel_key("BNowx2l588E"));
     const auto cpu = symbols.resolve(libkernel_key("g0VTBxfJyu0"));
@@ -443,7 +443,8 @@ NYXORA_TEST(libkernel_memory_hle_uses_runtime_guest_address_space) {
     NYXORA_CHECK(stack.has_value());
     NYXORA_CHECK(trampoline.has_value());
     nyxora::runtime::ScopedGuestThreadManager manager_scope(manager);
-    NYXORA_CHECK(trampoline->invoke(direct_size->address, stack->top()) == memory->native_size());
+    NYXORA_CHECK(trampoline->invoke(direct_size->address, stack->top()) ==
+                 services.direct_memory_size());
     NYXORA_CHECK(trampoline->invoke(mprotect->address, stack->top(), data_base, guest_page, 1) == 0);
 
     const auto* first = memory->find(data_base);
@@ -633,7 +634,7 @@ NYXORA_TEST(libkernel_services_propagate_into_pthread_guest_workers) {
     NYXORA_CHECK(manager.create(&handle, 0, direct_size->address, 0, 64 * 1024) == 0);
     nyxora::GuestAddress result = 0;
     NYXORA_CHECK(manager.join(handle, &result) == 0);
-    NYXORA_CHECK(result == memory->native_size());
+    NYXORA_CHECK(result == services.direct_memory_size());
 #endif
 }
 
@@ -1925,11 +1926,22 @@ NYXORA_TEST(libkernel_core_bindings_fail_safely_without_runtime_context) {
         static_cast<std::int64_t>(static_cast<std::int32_t>(
             nyxora::runtime::KernelServices::kErrorEbadf)));
     for (const char* nid : {"vSMAm3cxYTY", "PGhQHd-dzv8", "cQke9UuBQOk", "1G3lF1Gg1k8",
-                            "eV9wAD2riIA", "QvsZxomvUHs"}) {
+                            "eV9wAD2riIA", "QvsZxomvUHs", "rVjRvHJ0X6c", "WFcfL2lzido",
+                            "C0f7TJcbfac", "rTXw65xmLIA", "B+vc2AO2Zrc", "MBuItvba6z8",
+                            "hwVSPCmp5tM", "L-Q3LEjIbgA", "BHouLQzh0X0",
+                            "IWIBBdTHit4", "4h6F1LLbTiw", "aNz11fnnzi4",
+                            "n1-v6FgU7MQ"}) {
         NYXORA_CHECK(invoke(nid) == encoded_einval);
     }
     for (const char* nid : {"Cg4srZ6TKbU", "UK2Tl2DWUns", "oib76F-12fk", "kBwCPsYX-m4"}) {
         NYXORA_CHECK(invoke(nid) == encoded_ebadf);
+    }
+
+    constexpr auto encoded_efault = static_cast<std::uint64_t>(
+        static_cast<std::int64_t>(static_cast<std::int32_t>(
+            nyxora::runtime::KernelServices::kErrorEfault)));
+    for (const char* nid : {"NcaWUxfMNIQ", "mL8NDH86iQI"}) {
+        NYXORA_CHECK(invoke(nid) == encoded_efault);
     }
 
     for (const char* nid : {"GEnUkDZoUwY", "Vwc+L05e6oE", "C36iRE0F5sE", "H2a+IN9TP0E",
@@ -2162,4 +2174,369 @@ NYXORA_TEST(kernel_services_reject_invalid_sync_object_states_and_wrong_owner) {
     std::chrono::system_clock::time_point deadline;
     NYXORA_CHECK(services.realtime_deadline(timespec, deadline) ==
                  nyxora::runtime::KernelServices::kPosixEinval);
+}
+
+namespace {
+struct VmQueryInfo {
+    std::uint64_t start{};
+    std::uint64_t end{};
+    std::uint64_t offset{};
+    std::int32_t protection{};
+    std::int32_t memory_type{};
+    std::uint32_t flags{};
+    char name[32]{};
+    std::uint8_t gpu_mask_id{};
+    std::uint8_t reserved{};
+    std::uint16_t padding{};
+};
+static_assert(sizeof(VmQueryInfo) == 72);
+static_assert(offsetof(VmQueryInfo, flags) == 32);
+static_assert(offsetof(VmQueryInfo, name) == 36);
+static_assert(offsetof(VmQueryInfo, gpu_mask_id) == 68);
+
+struct DirectQueryInfo {
+    std::uint64_t start{};
+    std::uint64_t end{};
+    std::int32_t memory_type{};
+    std::uint32_t padding{};
+};
+static_assert(sizeof(DirectQueryInfo) == 24);
+
+template <typename T>
+T read_vm_value(const nyxora::memory::GuestAddressSpace& memory, nyxora::GuestAddress address) {
+    const auto bytes = memory.view(address, sizeof(T));
+    NYXORA_CHECK(bytes.size() == sizeof(T));
+    T value{};
+    std::memcpy(&value, bytes.data(), sizeof(T));
+    return value;
+}
+}
+
+NYXORA_TEST(kernel_services_direct_memory_reuses_physical_gaps_and_preserves_backing_until_release) {
+    constexpr nyxora::GuestSize guest_page = 0x4000;
+    auto memory = nyxora::memory::GuestAddressSpace::reserve_native(guest_page * 32);
+    NYXORA_CHECK(memory.has_value());
+    nyxora::runtime::KernelServices services(*memory);
+    NYXORA_CHECK(services.set_flexible_memory_size(guest_page * 4));
+    NYXORA_CHECK(services.configured_flexible_memory_size() == guest_page * 4);
+
+    const auto managed_base =
+        (memory->native_base() + guest_page - 1) / guest_page * guest_page;
+    NYXORA_CHECK(services.direct_memory_size() >= guest_page * 8);
+    NYXORA_CHECK(memory->map(managed_base, guest_page,
+                             nyxora::memory::Protection::read |
+                                 nyxora::memory::Protection::write,
+                             "vm-control"));
+
+    const auto physical_out = managed_base;
+    const auto direct_slot = managed_base + 8;
+    const auto reused_out = managed_base + 16;
+    const auto reused_slot = managed_base + 24;
+    NYXORA_CHECK(memory->zero(managed_base, guest_page));
+
+    NYXORA_CHECK(services.allocate_direct_memory(
+                     0, static_cast<std::int64_t>(services.direct_memory_size()), guest_page * 3,
+                     guest_page, 11, physical_out) == 0);
+    const auto physical = read_vm_value<std::uint64_t>(*memory, physical_out);
+    NYXORA_CHECK(physical >= guest_page);
+    NYXORA_CHECK(physical % guest_page == 0);
+
+    NYXORA_CHECK(services.map_direct_memory(direct_slot, guest_page * 3, 0x32, 0,
+                                             static_cast<std::int64_t>(physical), guest_page) == 0);
+    const auto direct_address = read_vm_value<std::uint64_t>(*memory, direct_slot);
+    NYXORA_CHECK(direct_address == managed_base + physical);
+    const std::uint64_t marker = 0x4e59584f5241444dULL;
+    NYXORA_CHECK(memory->write(direct_address + guest_page,
+                               std::as_bytes(std::span{&marker, 1})));
+
+    NYXORA_CHECK(services.unmap_memory(direct_address, guest_page * 3) == 0);
+    NYXORA_CHECK(memory->zero(direct_slot, sizeof(std::uint64_t)));
+    NYXORA_CHECK(services.map_direct_memory(direct_slot, guest_page * 3, 0x02, 0,
+                                             static_cast<std::int64_t>(physical), guest_page) == 0);
+    const auto observed = read_vm_value<std::uint64_t>(*memory, direct_address + guest_page);
+    NYXORA_CHECK(observed == marker);
+
+    NYXORA_CHECK(services.release_direct_memory(physical + guest_page, guest_page, false) == 0);
+    NYXORA_CHECK(services.allocate_direct_memory(
+                     0, static_cast<std::int64_t>(services.direct_memory_size()), guest_page,
+                     guest_page, 11, reused_out) == 0);
+    const auto reused_physical = read_vm_value<std::uint64_t>(*memory, reused_out);
+    NYXORA_CHECK(reused_physical == physical + guest_page);
+    NYXORA_CHECK(services.map_direct_memory(reused_slot, guest_page, 0x02, 0,
+                                             static_cast<std::int64_t>(reused_physical),
+                                             guest_page) == 0);
+    const auto cleared = read_vm_value<std::uint64_t>(*memory, managed_base + reused_physical);
+    NYXORA_CHECK(cleared == 0);
+
+    NYXORA_CHECK(services.release_direct_memory(physical, guest_page * 3, true) == 0);
+    NYXORA_CHECK(services.release_direct_memory(physical, guest_page, true) != 0);
+}
+
+NYXORA_TEST(kernel_services_flexible_memory_and_virtual_query_track_partial_unmap) {
+    constexpr nyxora::GuestSize guest_page = 0x4000;
+    auto memory = nyxora::memory::GuestAddressSpace::reserve_native(guest_page * 24);
+    NYXORA_CHECK(memory.has_value());
+    nyxora::runtime::KernelServices services(*memory);
+    constexpr nyxora::GuestSize flexible_size = guest_page * 4;
+    NYXORA_CHECK(services.set_flexible_memory_size(flexible_size));
+    NYXORA_CHECK(services.available_flexible_memory_size() == flexible_size);
+
+    const auto managed_base =
+        (memory->native_base() + guest_page - 1) / guest_page * guest_page;
+    const auto flex_base = managed_base + services.direct_memory_size();
+    NYXORA_CHECK(memory->map(managed_base, guest_page,
+                             nyxora::memory::Protection::read |
+                                 nyxora::memory::Protection::write,
+                             "vm-control"));
+    NYXORA_CHECK(memory->zero(managed_base, guest_page));
+
+    const auto slot = managed_base;
+    const auto query_address = managed_base + 64;
+    const auto start_out = managed_base + 160;
+    const auto end_out = managed_base + 168;
+    const auto protection_out = managed_base + 176;
+    NYXORA_CHECK(services.map_flexible_memory(slot, guest_page * 2, 0x32, 0) == 0);
+    const auto mapped = read_vm_value<std::uint64_t>(*memory, slot);
+    NYXORA_CHECK(mapped == flex_base);
+    NYXORA_CHECK(services.available_flexible_memory_size() == flexible_size - guest_page * 2);
+
+    const std::uint64_t marker = 0xaaaaaaaaaaaaaaaaULL;
+    NYXORA_CHECK(memory->write(mapped, std::as_bytes(std::span{&marker, 1})));
+    NYXORA_CHECK(services.virtual_query(mapped, 0, query_address, sizeof(VmQueryInfo)) == 0);
+    auto info = read_vm_value<VmQueryInfo>(*memory, query_address);
+    NYXORA_CHECK(info.start == mapped);
+    NYXORA_CHECK(info.end == mapped + guest_page * 2);
+    NYXORA_CHECK((info.flags & 0x01U) != 0);
+    NYXORA_CHECK((info.flags & 0x10U) != 0);
+    NYXORA_CHECK(info.protection == 0x32);
+
+    NYXORA_CHECK(services.query_memory_protection(mapped, start_out, end_out, protection_out) == 0);
+    const auto start = read_vm_value<std::uint64_t>(*memory, start_out);
+    const auto end = read_vm_value<std::uint64_t>(*memory, end_out);
+    const auto protection = read_vm_value<std::uint32_t>(*memory, protection_out);
+    NYXORA_CHECK(start == mapped && end == mapped + guest_page * 2 && protection == 0x32);
+
+    NYXORA_CHECK(services.unmap_memory(mapped, guest_page) == 0);
+    NYXORA_CHECK(services.available_flexible_memory_size() == flexible_size - guest_page);
+    NYXORA_CHECK(services.virtual_query(mapped, 0, query_address, sizeof(VmQueryInfo)) ==
+                 static_cast<std::int64_t>(static_cast<std::int32_t>(
+                     nyxora::runtime::KernelServices::kErrorEacces)));
+    NYXORA_CHECK(services.virtual_query(mapped, 1, query_address, sizeof(VmQueryInfo)) == 0);
+    info = read_vm_value<VmQueryInfo>(*memory, query_address);
+    NYXORA_CHECK(info.start == mapped + guest_page);
+
+    NYXORA_CHECK(memory->zero(slot, sizeof(std::uint64_t)));
+    NYXORA_CHECK(services.map_flexible_memory(slot, guest_page, 0x02, 0) == 0);
+    const auto reused = read_vm_value<std::uint64_t>(*memory, slot);
+    NYXORA_CHECK(reused == mapped);
+    const auto cleared = read_vm_value<std::uint64_t>(*memory, reused);
+    NYXORA_CHECK(cleared == 0);
+
+    NYXORA_CHECK(services.unmap_memory(mapped, guest_page * 2) == 0);
+    NYXORA_CHECK(services.available_flexible_memory_size() == flexible_size);
+}
+
+NYXORA_TEST(libkernel_vm_allocator_hle_round_trips_through_guest_abi) {
+#if defined(__x86_64__) || defined(_M_X64)
+    constexpr nyxora::GuestSize guest_page = 0x4000;
+    auto memory = nyxora::memory::GuestAddressSpace::reserve_native(guest_page * 40);
+    NYXORA_CHECK(memory.has_value());
+    nyxora::runtime::KernelServices services(*memory);
+    constexpr nyxora::GuestSize flexible_size = guest_page * 4;
+    NYXORA_CHECK(services.set_flexible_memory_size(flexible_size));
+
+    const auto managed_base =
+        (memory->native_base() + guest_page - 1) / guest_page * guest_page;
+    NYXORA_CHECK(memory->map(managed_base, guest_page,
+                             nyxora::memory::Protection::read |
+                                 nyxora::memory::Protection::write,
+                             "vm-hle-control"));
+    NYXORA_CHECK(memory->zero(managed_base, guest_page));
+
+    constexpr char direct_name[] = "hle-direct";
+    constexpr char flexible_name[] = "hle-flexible";
+    const auto direct_name_address = managed_base + 0x300;
+    const auto flexible_name_address = managed_base + 0x340;
+    NYXORA_CHECK(memory->write(
+        direct_name_address,
+        std::span<const std::byte>(reinterpret_cast<const std::byte*>(direct_name),
+                                   sizeof(direct_name))));
+    NYXORA_CHECK(memory->write(
+        flexible_name_address,
+        std::span<const std::byte>(reinterpret_cast<const std::byte*>(flexible_name),
+                                   sizeof(flexible_name))));
+
+    nyxora::runtime::TlsRegistry tls;
+    nyxora::runtime::GuestThreadManager manager(tls, &services);
+    nyxora::runtime::ScopedGuestThreadManager manager_scope(manager);
+    nyxora::runtime::SymbolRegistry symbols;
+    nyxora::runtime::HleRegistry hle(symbols);
+    nyxora::hle::libkernel::register_core(hle);
+    NYXORA_CHECK(hle.size() == 189);
+
+    auto binding = [&](const char* nid) {
+        const auto value = symbols.resolve(libkernel_key(nid));
+        NYXORA_CHECK(value.has_value());
+        return value->address;
+    };
+
+    const auto configured_out = managed_base;
+    const auto available_out = managed_base + 8;
+    const auto physical_out = managed_base + 16;
+    const auto direct_available_out = managed_base + 24;
+    const auto direct_slot = managed_base + 32;
+    const auto direct_query_out = managed_base + 64;
+    const auto virtual_query_out = managed_base + 128;
+    const auto protection_start_out = managed_base + 208;
+    const auto protection_end_out = managed_base + 216;
+    const auto protection_out = managed_base + 224;
+    const auto flexible_slot = managed_base + 232;
+
+    const std::array configured_args{configured_out};
+    NYXORA_CHECK(invoke_guest_sysv_call(binding("n1-v6FgU7MQ"), configured_args) == 0);
+    NYXORA_CHECK(read_vm_value<std::uint64_t>(*memory, configured_out) == flexible_size);
+    const std::array available_flexible_args{available_out};
+    NYXORA_CHECK(invoke_guest_sysv_call(binding("aNz11fnnzi4"), available_flexible_args) == 0);
+    NYXORA_CHECK(read_vm_value<std::uint64_t>(*memory, available_out) == flexible_size);
+
+    const auto direct_size = services.direct_memory_size();
+    const std::array<std::uint64_t, 5> available_direct_args{
+        0, direct_size, guest_page, physical_out, direct_available_out};
+    NYXORA_CHECK(invoke_guest_sysv_call(binding("C0f7TJcbfac"), available_direct_args) == 0);
+    NYXORA_CHECK(read_vm_value<std::uint64_t>(*memory, direct_available_out) >= guest_page);
+
+    const std::array<std::uint64_t, 6> allocate_args{
+        0, direct_size, guest_page, guest_page, 11, physical_out};
+    NYXORA_CHECK(invoke_guest_sysv_call(binding("rTXw65xmLIA"), allocate_args) == 0);
+    const auto physical = read_vm_value<std::uint64_t>(*memory, physical_out);
+    NYXORA_CHECK(physical >= guest_page);
+
+    const std::array<std::uint64_t, 4> direct_query_args{
+        physical, 0, direct_query_out, sizeof(DirectQueryInfo)};
+    NYXORA_CHECK(invoke_guest_sysv_call(binding("BHouLQzh0X0"), direct_query_args) == 0);
+    const auto direct_query = read_vm_value<DirectQueryInfo>(*memory, direct_query_out);
+    NYXORA_CHECK(direct_query.start == physical);
+    NYXORA_CHECK(direct_query.end == physical + guest_page);
+    NYXORA_CHECK(direct_query.memory_type == 11);
+
+    NYXORA_CHECK(memory->zero(direct_slot, sizeof(std::uint64_t)));
+    const std::array<std::uint64_t, 7> map_direct_args{
+        direct_slot, guest_page, 0x32, 0, physical, guest_page, direct_name_address};
+    NYXORA_CHECK(invoke_guest_sysv_call(binding("NcaWUxfMNIQ"), map_direct_args) == 0);
+    const auto direct_address = read_vm_value<std::uint64_t>(*memory, direct_slot);
+    NYXORA_CHECK(direct_address == managed_base + physical);
+
+    const std::array<std::uint64_t, 4> virtual_query_args{
+        direct_address, 0, virtual_query_out, sizeof(VmQueryInfo)};
+    NYXORA_CHECK(invoke_guest_sysv_call(binding("rVjRvHJ0X6c"), virtual_query_args) == 0);
+    const auto direct_info = read_vm_value<VmQueryInfo>(*memory, virtual_query_out);
+    NYXORA_CHECK(direct_info.start == direct_address);
+    NYXORA_CHECK(direct_info.offset == physical);
+    NYXORA_CHECK(direct_info.memory_type == 11);
+    NYXORA_CHECK((direct_info.flags & 0x02U) != 0);
+    NYXORA_CHECK(direct_info.protection == 0x32);
+    NYXORA_CHECK(std::string(direct_info.name) == direct_name);
+
+    const std::array<std::uint64_t, 4> query_protection_args{
+        direct_address, protection_start_out, protection_end_out, protection_out};
+    NYXORA_CHECK(invoke_guest_sysv_call(binding("WFcfL2lzido"), query_protection_args) == 0);
+    NYXORA_CHECK(read_vm_value<std::uint64_t>(*memory, protection_start_out) == direct_address);
+    NYXORA_CHECK(read_vm_value<std::uint64_t>(*memory, protection_end_out) ==
+                 direct_address + guest_page);
+    NYXORA_CHECK(read_vm_value<std::uint32_t>(*memory, protection_out) == 0x32);
+
+    const std::array<std::uint64_t, 2> release_args{physical, guest_page};
+    NYXORA_CHECK(invoke_guest_sysv_call(binding("hwVSPCmp5tM"), release_args) == 0);
+    NYXORA_CHECK(memory->find(direct_address) == nullptr);
+
+    NYXORA_CHECK(memory->zero(flexible_slot, sizeof(std::uint64_t)));
+    const std::array<std::uint64_t, 5> map_flexible_args{
+        flexible_slot, guest_page, 0x02, 0, flexible_name_address};
+    NYXORA_CHECK(invoke_guest_sysv_call(binding("mL8NDH86iQI"), map_flexible_args) == 0);
+    const auto flexible_address = read_vm_value<std::uint64_t>(*memory, flexible_slot);
+    const auto flexible_info_args = std::array<std::uint64_t, 4>{
+        flexible_address, 0, virtual_query_out, sizeof(VmQueryInfo)};
+    NYXORA_CHECK(invoke_guest_sysv_call(binding("rVjRvHJ0X6c"), flexible_info_args) == 0);
+    const auto flexible_info = read_vm_value<VmQueryInfo>(*memory, virtual_query_out);
+    NYXORA_CHECK((flexible_info.flags & 0x01U) != 0);
+    NYXORA_CHECK(std::string(flexible_info.name) == flexible_name);
+
+    NYXORA_CHECK(invoke_guest_sysv_call(binding("aNz11fnnzi4"), available_flexible_args) == 0);
+    NYXORA_CHECK(read_vm_value<std::uint64_t>(*memory, available_out) == flexible_size - guest_page);
+    const std::array<std::uint64_t, 2> unmap_args{flexible_address, guest_page};
+    NYXORA_CHECK(invoke_guest_sysv_call(binding("cQke9UuBQOk"), unmap_args) == 0);
+    NYXORA_CHECK(invoke_guest_sysv_call(binding("aNz11fnnzi4"), available_flexible_args) == 0);
+    NYXORA_CHECK(read_vm_value<std::uint64_t>(*memory, available_out) == flexible_size);
+#endif
+}
+
+NYXORA_TEST(kernel_services_vm_allocator_preserves_public_edge_semantics) {
+    constexpr nyxora::GuestSize guest_page = 0x4000;
+    auto memory = nyxora::memory::GuestAddressSpace::reserve_native(guest_page * 20);
+    NYXORA_CHECK(memory.has_value());
+    nyxora::runtime::KernelServices services(*memory);
+    const auto managed_base =
+        (memory->native_base() + guest_page - 1) / guest_page * guest_page;
+    NYXORA_CHECK(memory->map(managed_base, guest_page,
+                             nyxora::memory::Protection::read |
+                                 nyxora::memory::Protection::write,
+                             "vm-edge-control"));
+    NYXORA_CHECK(memory->zero(managed_base, guest_page));
+
+    const auto physical_out = managed_base;
+    const auto slot = managed_base + 8;
+    const auto capacity = services.direct_memory_size();
+    NYXORA_CHECK(capacity > guest_page * 2);
+
+    NYXORA_CHECK(services.allocate_direct_memory(0, static_cast<std::int64_t>(capacity), guest_page,
+                                                  0, 11, physical_out) == 0);
+    const auto physical = read_vm_value<std::uint64_t>(*memory, physical_out);
+    NYXORA_CHECK(physical % guest_page == 0);
+    NYXORA_CHECK(memory->zero(slot, sizeof(std::uint64_t)));
+    NYXORA_CHECK(services.map_direct_memory(slot, guest_page, 0x02, 0,
+                                             static_cast<std::int64_t>(physical), 0) == 0);
+
+    const auto kernel_error = [](std::uint32_t value) {
+        return static_cast<std::int64_t>(static_cast<std::int32_t>(value));
+    };
+    NYXORA_CHECK(services.allocate_direct_memory(
+                     static_cast<std::int64_t>(physical),
+                     static_cast<std::int64_t>(physical + guest_page), guest_page, 0, 11,
+                     physical_out) == kernel_error(nyxora::runtime::KernelServices::kErrorEagain));
+
+    const auto hole = physical + guest_page * 2;
+    const auto hole_va = managed_base + hole;
+    NYXORA_CHECK(memory->map(hole_va, guest_page,
+                             nyxora::memory::Protection::read |
+                                 nyxora::memory::Protection::write,
+                             "ordinary-hole"));
+    NYXORA_CHECK(services.release_direct_memory(hole, guest_page, false) == 0);
+    NYXORA_CHECK(memory->find(hole_va) != nullptr);
+    NYXORA_CHECK(services.release_direct_memory(hole, guest_page, true) ==
+                 kernel_error(nyxora::runtime::KernelServices::kErrorEnoent));
+
+    const auto query_out = managed_base + 0x280;
+    NYXORA_CHECK(services.virtual_query(managed_base, 0, query_out, sizeof(VmQueryInfo) + 8) ==
+                 kernel_error(nyxora::runtime::KernelServices::kErrorEinval));
+    NYXORA_CHECK(services.direct_memory_query(-1, 0, query_out, sizeof(DirectQueryInfo)) ==
+                 kernel_error(nyxora::runtime::KernelServices::kErrorEinval));
+    NYXORA_CHECK(services.direct_memory_query(
+                     static_cast<std::int64_t>(physical), 0, query_out,
+                     sizeof(DirectQueryInfo) + 8) ==
+                 kernel_error(nyxora::runtime::KernelServices::kErrorEinval));
+
+    std::string long_name(32, 'x');
+    const auto name_address = managed_base + 0x200;
+    long_name.push_back('\0');
+    NYXORA_CHECK(memory->write(
+        name_address,
+        std::span<const std::byte>(reinterpret_cast<const std::byte*>(long_name.data()),
+                                   long_name.size())));
+    NYXORA_CHECK(memory->zero(slot, sizeof(std::uint64_t)));
+    NYXORA_CHECK(services.map_direct_memory(slot, guest_page, 0x02, 0,
+                                             static_cast<std::int64_t>(physical), guest_page,
+                                             name_address) ==
+                 kernel_error(nyxora::runtime::KernelServices::kErrorEnametoolong));
+
+    NYXORA_CHECK(services.release_direct_memory(physical, guest_page, true) == 0);
 }

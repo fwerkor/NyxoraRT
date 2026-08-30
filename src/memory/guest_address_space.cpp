@@ -37,11 +37,19 @@ std::optional<GuestSize> GuestAddressSpace::native_offset(GuestAddress address) 
 
 bool GuestAddressSpace::map(GuestAddress base, GuestSize size, Protection protection,
                             std::string name) {
+    return map(RegionInfo{base, size, protection, std::move(name)});
+}
+
+bool GuestAddressSpace::map(RegionInfo info) {
     GuestAddress end{};
-    if (!end_address(base, size, end) || size > std::numeric_limits<std::size_t>::max()) {
+    if (!end_address(info.base, info.size, end) ||
+        info.size > std::numeric_limits<std::size_t>::max()) {
         return false;
     }
 
+    const auto base = info.base;
+    const auto size = info.size;
+    const auto protection = info.protection;
     auto next = regions_.lower_bound(base);
     if (next != regions_.end() && next->first < end) {
         return false;
@@ -54,7 +62,7 @@ bool GuestAddressSpace::map(GuestAddress base, GuestSize size, Protection protec
     }
 
     Region region;
-    region.info = RegionInfo{base, size, protection, std::move(name)};
+    region.info = std::move(info);
     if (native_) {
         const auto offset = native_offset(base);
         if (!offset || size > native_->size() - *offset || !native_->protect(*offset, size, protection)) {
@@ -104,8 +112,9 @@ bool GuestAddressSpace::unmap_range(GuestAddress base, GuestSize size) {
         const auto original_end = original.info.base + original.info.size;
         if (overlap_base > original.info.base) {
             Region before;
-            before.info = RegionInfo{original.info.base, overlap_base - original.info.base,
-                                     original.info.protection, original.info.name};
+            before.info = original.info;
+            before.info.base = original.info.base;
+            before.info.size = overlap_base - original.info.base;
             if (!native_) {
                 before.storage.assign(original.storage.begin(),
                                       original.storage.begin() +
@@ -115,8 +124,12 @@ bool GuestAddressSpace::unmap_range(GuestAddress base, GuestSize size) {
         }
         if (overlap_end < original_end) {
             Region after;
-            after.info = RegionInfo{overlap_end, original_end - overlap_end,
-                                    original.info.protection, original.info.name};
+            after.info = original.info;
+            after.info.base = overlap_end;
+            after.info.size = original_end - overlap_end;
+            if (after.info.kind == RegionKind::direct || after.info.kind == RegionKind::file) {
+                after.info.offset += overlap_end - original.info.base;
+            }
             if (!native_) {
                 const auto storage_offset = overlap_end - original.info.base;
                 after.storage.assign(
@@ -220,7 +233,13 @@ bool GuestAddressSpace::protect_range(GuestAddress base, GuestSize size, Protect
     const auto make_region = [&](GuestAddress piece_base, GuestSize piece_size,
                                  Protection piece_protection, GuestSize storage_offset) {
         Region piece;
-        piece.info = RegionInfo{piece_base, piece_size, piece_protection, it->second.info.name};
+        piece.info = it->second.info;
+        piece.info.base = piece_base;
+        piece.info.size = piece_size;
+        piece.info.protection = piece_protection;
+        if (piece.info.kind == RegionKind::direct || piece.info.kind == RegionKind::file) {
+            piece.info.offset += storage_offset;
+        }
         if (!native_) {
             const auto begin =
                 it->second.storage.begin() + static_cast<std::ptrdiff_t>(storage_offset);

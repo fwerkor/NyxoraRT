@@ -7,11 +7,13 @@
 #include <deque>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <vector>
 
 #include "nyxora/base/types.hpp"
 #include "nyxora/memory/guest_address_space.hpp"
@@ -27,7 +29,9 @@ public:
     static constexpr std::uint32_t kErrorEfault = 0x8002000eU;
     static constexpr std::uint32_t kErrorEinval = 0x80020016U;
     static constexpr std::uint32_t kErrorEnotty = 0x80020019U;
+    static constexpr std::uint32_t kErrorEagain = 0x80020023U;
     static constexpr std::uint32_t kErrorEnotsup = 0x8002002dU;
+    static constexpr std::uint32_t kErrorEnametoolong = 0x8002003fU;
 
     static constexpr int kPosixEperm = 1;
     static constexpr int kPosixEbadf = 9;
@@ -45,7 +49,34 @@ public:
 
     [[nodiscard]] bool set_guest_root(const std::filesystem::path& root);
     [[nodiscard]] bool guest_root_configured() const noexcept { return !guest_root_.empty(); }
-    [[nodiscard]] std::uint64_t direct_memory_size() const noexcept;
+    [[nodiscard]] bool set_flexible_memory_size(GuestSize size);
+    [[nodiscard]] std::uint64_t direct_memory_size() const;
+    [[nodiscard]] std::uint64_t configured_flexible_memory_size() const;
+    [[nodiscard]] std::uint64_t available_flexible_memory_size() const;
+    [[nodiscard]] std::int64_t configured_flexible_memory_size_to(GuestAddress size_out);
+    [[nodiscard]] std::int64_t available_flexible_memory_size_to(GuestAddress size_out);
+    [[nodiscard]] std::int64_t direct_memory_query(std::int64_t physical_address, int flags,
+                                                   GuestAddress info_address, GuestSize info_size);
+    [[nodiscard]] std::int64_t virtual_query(GuestAddress address, int flags,
+                                             GuestAddress info_address, GuestSize info_size);
+    [[nodiscard]] std::int64_t query_memory_protection(GuestAddress address,
+                                                       GuestAddress start_address,
+                                                       GuestAddress end_address,
+                                                       GuestAddress protection_address);
+    [[nodiscard]] std::int64_t available_direct_memory(
+        std::int64_t search_start, std::int64_t search_end, GuestSize alignment,
+        GuestAddress physical_address_out, GuestAddress size_out);
+    [[nodiscard]] std::int64_t allocate_direct_memory(
+        std::int64_t search_start, std::int64_t search_end, GuestSize size, GuestSize alignment,
+        int memory_type, GuestAddress physical_address_out);
+    [[nodiscard]] std::int64_t release_direct_memory(GuestAddress physical_address,
+                                                     GuestSize size, bool checked);
+    [[nodiscard]] std::int64_t map_direct_memory(
+        GuestAddress address_slot, GuestSize size, std::uint32_t protection, std::uint32_t flags,
+        std::int64_t physical_address, GuestSize alignment, GuestAddress name_address = 0);
+    [[nodiscard]] std::int64_t map_flexible_memory(
+        GuestAddress address_slot, GuestSize size, std::uint32_t protection, std::uint32_t flags,
+        GuestAddress name_address = 0);
     [[nodiscard]] std::int64_t mprotect(GuestAddress address, GuestSize size,
                                         std::uint32_t protection);
     [[nodiscard]] std::int64_t map_memory(GuestAddress address, GuestSize size,
@@ -133,6 +164,11 @@ public:
         GuestAddress timespec_address, std::chrono::system_clock::time_point& deadline) const;
 
 private:
+    struct DirectAllocation {
+        GuestSize size{};
+        std::int32_t memory_type{};
+    };
+
     struct FileRecord {
         FileRecord(std::ifstream file_in, std::filesystem::path path_in)
             : file(std::move(file_in)), path(std::move(path_in)) {}
@@ -199,6 +235,15 @@ private:
     };
 
     [[nodiscard]] static std::int64_t error(std::uint32_t value) noexcept;
+    using PhysicalRange = std::pair<GuestAddress, GuestAddress>;
+
+    [[nodiscard]] GuestSize direct_capacity_locked() const noexcept;
+    [[nodiscard]] GuestAddress direct_virtual_address(GuestAddress physical_address) const noexcept;
+    [[nodiscard]] GuestAddress flexible_base_locked() const noexcept;
+    [[nodiscard]] std::vector<PhysicalRange> direct_blocked_ranges_locked() const;
+    [[nodiscard]] bool direct_range_covered_locked(GuestAddress base, GuestSize size,
+                                                   std::int32_t& memory_type) const;
+    [[nodiscard]] bool direct_range_has_allocation_locked(GuestAddress base, GuestSize size) const;
     [[nodiscard]] bool read_guest_u64(GuestAddress address, std::uint64_t& value) const;
     [[nodiscard]] bool write_guest_u64(GuestAddress address, std::uint64_t value);
     [[nodiscard]] bool write_guest_u32(GuestAddress address, std::uint32_t value);
@@ -235,6 +280,13 @@ private:
 
     memory::GuestAddressSpace& memory_;
     std::filesystem::path guest_root_;
+
+    mutable std::mutex vm_mutex_;
+    GuestAddress managed_base_{};
+    GuestSize managed_size_{};
+    GuestSize flexible_capacity_{};
+    GuestSize flexible_used_{};
+    std::map<GuestAddress, DirectAllocation> direct_allocations_;
 
     mutable std::mutex files_mutex_;
     int next_fd_{3};

@@ -98,3 +98,44 @@ NYXORA_TEST(guest_address_space_exact_unmap_requires_matching_region) {
     NYXORA_CHECK(memory.find(base) == nullptr);
     NYXORA_CHECK(!memory.unmap(base, size));
 }
+
+NYXORA_TEST(guest_address_space_preserves_semantic_metadata_across_splits) {
+    using nyxora::memory::Protection;
+    using nyxora::memory::RegionInfo;
+    using nyxora::memory::RegionKind;
+
+    nyxora::memory::GuestAddressSpace memory;
+    constexpr nyxora::GuestAddress base = 0x20000;
+    constexpr nyxora::GuestSize page = 0x4000;
+    RegionInfo direct{
+        .base = base,
+        .size = page * 3,
+        .protection = Protection::read | Protection::write,
+        .name = "direct-meta",
+        .offset = 0x8000,
+        .memory_type = 11,
+        .kind = RegionKind::direct,
+        .committed = true,
+        .auxiliary_protection = 0x30,
+    };
+    NYXORA_CHECK(memory.map(std::move(direct)));
+    NYXORA_CHECK(memory.protect_range(base + page, page, Protection::read));
+
+    auto regions = memory.regions();
+    NYXORA_CHECK(regions.size() == 3);
+    for (std::size_t index = 0; index < regions.size(); ++index) {
+        NYXORA_CHECK(regions[index].kind == RegionKind::direct);
+        NYXORA_CHECK(regions[index].memory_type == 11);
+        NYXORA_CHECK(regions[index].name == "direct-meta");
+        NYXORA_CHECK(regions[index].auxiliary_protection == 0x30);
+        NYXORA_CHECK(regions[index].offset == 0x8000 + page * index);
+    }
+    NYXORA_CHECK(regions[1].protection == Protection::read);
+
+    NYXORA_CHECK(memory.unmap_range(base + page, page));
+    regions = memory.regions();
+    NYXORA_CHECK(regions.size() == 2);
+    NYXORA_CHECK(regions[0].offset == 0x8000);
+    NYXORA_CHECK(regions[1].base == base + page * 2);
+    NYXORA_CHECK(regions[1].offset == 0x8000 + page * 2);
+}

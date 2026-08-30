@@ -15,11 +15,26 @@
 
 namespace nyxora::memory {
 
+enum class RegionKind : std::uint8_t {
+    generic,
+    anonymous,
+    file,
+    stack,
+    reserved,
+    flexible,
+    direct,
+};
+
 struct RegionInfo {
     GuestAddress base{};
     GuestSize size{};
     Protection protection{Protection::none};
     std::string name;
+    std::uint64_t offset{};
+    std::int32_t memory_type{};
+    RegionKind kind{RegionKind::generic};
+    bool committed{true};
+    std::uint32_t auxiliary_protection{};
 };
 
 class GuestAddressSpace {
@@ -42,6 +57,7 @@ public:
     }
 
     bool map(GuestAddress base, GuestSize size, Protection protection, std::string name);
+    bool map(RegionInfo info);
     bool unmap(GuestAddress base, GuestSize size);
     bool unmap_range(GuestAddress base, GuestSize size);
     bool protect(GuestAddress base, GuestSize size, Protection protection);

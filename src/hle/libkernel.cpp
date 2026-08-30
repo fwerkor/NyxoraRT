@@ -83,6 +83,179 @@ std::uint64_t direct_memory_size() {
     return services == nullptr ? 0 : services->direct_memory_size();
 }
 
+std::uint64_t kernel_virtual_query(std::uint64_t address, std::uint64_t flags,
+                                   std::uint64_t info, std::uint64_t info_size) {
+    auto* services = kernel_services();
+    if (services == nullptr) {
+        return kernel_error_result(runtime::KernelServices::kErrorEinval);
+    }
+    return signed_result(services->virtual_query(static_cast<GuestAddress>(address),
+                                                 static_cast<int>(static_cast<std::int32_t>(flags)),
+                                                 static_cast<GuestAddress>(info),
+                                                 static_cast<GuestSize>(info_size)));
+}
+
+std::uint64_t kernel_query_memory_protection(std::uint64_t address, std::uint64_t start,
+                                             std::uint64_t end, std::uint64_t protection) {
+    auto* services = kernel_services();
+    if (services == nullptr) {
+        return kernel_error_result(runtime::KernelServices::kErrorEinval);
+    }
+    return signed_result(services->query_memory_protection(
+        static_cast<GuestAddress>(address), static_cast<GuestAddress>(start),
+        static_cast<GuestAddress>(end), static_cast<GuestAddress>(protection)));
+}
+
+std::uint64_t kernel_available_direct_memory(std::uint64_t search_start,
+                                             std::uint64_t search_end,
+                                             std::uint64_t alignment,
+                                             std::uint64_t physical_out,
+                                             std::uint64_t size_out) {
+    auto* services = kernel_services();
+    if (services == nullptr) {
+        return kernel_error_result(runtime::KernelServices::kErrorEinval);
+    }
+    return signed_result(services->available_direct_memory(
+        static_cast<std::int64_t>(search_start), static_cast<std::int64_t>(search_end),
+        static_cast<GuestSize>(alignment), static_cast<GuestAddress>(physical_out),
+        static_cast<GuestAddress>(size_out)));
+}
+
+std::uint64_t kernel_allocate_direct_memory(std::uint64_t search_start,
+                                            std::uint64_t search_end, std::uint64_t size,
+                                            std::uint64_t alignment, std::uint64_t memory_type,
+                                            std::uint64_t physical_out) {
+    auto* services = kernel_services();
+    if (services == nullptr) {
+        return kernel_error_result(runtime::KernelServices::kErrorEinval);
+    }
+    return signed_result(services->allocate_direct_memory(
+        static_cast<std::int64_t>(search_start), static_cast<std::int64_t>(search_end),
+        static_cast<GuestSize>(size), static_cast<GuestSize>(alignment),
+        static_cast<int>(static_cast<std::int32_t>(memory_type)),
+        static_cast<GuestAddress>(physical_out)));
+}
+
+std::uint64_t kernel_allocate_main_direct_memory(std::uint64_t size, std::uint64_t alignment,
+                                                 std::uint64_t memory_type,
+                                                 std::uint64_t physical_out) {
+    auto* services = kernel_services();
+    if (services == nullptr) {
+        return kernel_error_result(runtime::KernelServices::kErrorEinval);
+    }
+    return signed_result(services->allocate_direct_memory(
+        0, static_cast<std::int64_t>(services->direct_memory_size()), static_cast<GuestSize>(size),
+        static_cast<GuestSize>(alignment), static_cast<int>(static_cast<std::int32_t>(memory_type)),
+        static_cast<GuestAddress>(physical_out)));
+}
+
+std::uint64_t kernel_release_direct_memory(std::uint64_t physical_address, std::uint64_t size) {
+    auto* services = kernel_services();
+    if (services == nullptr) {
+        return kernel_error_result(runtime::KernelServices::kErrorEinval);
+    }
+    return signed_result(services->release_direct_memory(static_cast<GuestAddress>(physical_address),
+                                                         static_cast<GuestSize>(size), false));
+}
+
+std::uint64_t kernel_checked_release_direct_memory(std::uint64_t physical_address,
+                                                   std::uint64_t size) {
+    auto* services = kernel_services();
+    if (services == nullptr) {
+        return kernel_error_result(runtime::KernelServices::kErrorEinval);
+    }
+    return signed_result(services->release_direct_memory(static_cast<GuestAddress>(physical_address),
+                                                         static_cast<GuestSize>(size), true));
+}
+
+std::uint64_t kernel_map_direct_memory(std::uint64_t address_slot, std::uint64_t size,
+                                       std::uint64_t protection, std::uint64_t flags,
+                                       std::uint64_t physical_address, std::uint64_t alignment) {
+    auto* services = kernel_services();
+    if (services == nullptr) {
+        return kernel_error_result(runtime::KernelServices::kErrorEinval);
+    }
+    return signed_result(services->map_direct_memory(
+        static_cast<GuestAddress>(address_slot), static_cast<GuestSize>(size),
+        static_cast<std::uint32_t>(protection), static_cast<std::uint32_t>(flags),
+        static_cast<std::int64_t>(physical_address), static_cast<GuestSize>(alignment)));
+}
+
+std::uint64_t kernel_map_named_direct_memory(std::uint64_t address_slot, std::uint64_t size,
+                                             std::uint64_t protection, std::uint64_t flags,
+                                             std::uint64_t physical_address,
+                                             std::uint64_t alignment, std::uint64_t name) {
+    if (name == 0) {
+        return kernel_error_result(runtime::KernelServices::kErrorEfault);
+    }
+    auto* services = kernel_services();
+    if (services == nullptr) {
+        return kernel_error_result(runtime::KernelServices::kErrorEinval);
+    }
+    return signed_result(services->map_direct_memory(
+        static_cast<GuestAddress>(address_slot), static_cast<GuestSize>(size),
+        static_cast<std::uint32_t>(protection), static_cast<std::uint32_t>(flags),
+        static_cast<std::int64_t>(physical_address), static_cast<GuestSize>(alignment),
+        static_cast<GuestAddress>(name)));
+}
+
+std::uint64_t kernel_direct_memory_query(std::uint64_t physical_address, std::uint64_t flags,
+                                         std::uint64_t info, std::uint64_t info_size) {
+    auto* services = kernel_services();
+    if (services == nullptr) {
+        return kernel_error_result(runtime::KernelServices::kErrorEinval);
+    }
+    return signed_result(services->direct_memory_query(
+        static_cast<std::int64_t>(physical_address),
+        static_cast<int>(static_cast<std::int32_t>(flags)), static_cast<GuestAddress>(info),
+        static_cast<GuestSize>(info_size)));
+}
+
+std::uint64_t kernel_map_flexible_memory(std::uint64_t address_slot, std::uint64_t size,
+                                         std::uint64_t protection, std::uint64_t flags) {
+    auto* services = kernel_services();
+    if (services == nullptr) {
+        return kernel_error_result(runtime::KernelServices::kErrorEinval);
+    }
+    return signed_result(services->map_flexible_memory(
+        static_cast<GuestAddress>(address_slot), static_cast<GuestSize>(size),
+        static_cast<std::uint32_t>(protection), static_cast<std::uint32_t>(flags)));
+}
+
+std::uint64_t kernel_map_named_flexible_memory(std::uint64_t address_slot, std::uint64_t size,
+                                               std::uint64_t protection, std::uint64_t flags,
+                                               std::uint64_t name) {
+    if (name == 0) {
+        return kernel_error_result(runtime::KernelServices::kErrorEfault);
+    }
+    auto* services = kernel_services();
+    if (services == nullptr) {
+        return kernel_error_result(runtime::KernelServices::kErrorEinval);
+    }
+    return signed_result(services->map_flexible_memory(
+        static_cast<GuestAddress>(address_slot), static_cast<GuestSize>(size),
+        static_cast<std::uint32_t>(protection), static_cast<std::uint32_t>(flags),
+        static_cast<GuestAddress>(name)));
+}
+
+std::uint64_t kernel_available_flexible_memory(std::uint64_t size_out) {
+    auto* services = kernel_services();
+    if (services == nullptr) {
+        return kernel_error_result(runtime::KernelServices::kErrorEinval);
+    }
+    return signed_result(services->available_flexible_memory_size_to(
+        static_cast<GuestAddress>(size_out)));
+}
+
+std::uint64_t kernel_configured_flexible_memory(std::uint64_t size_out) {
+    auto* services = kernel_services();
+    if (services == nullptr) {
+        return kernel_error_result(runtime::KernelServices::kErrorEinval);
+    }
+    return signed_result(services->configured_flexible_memory_size_to(
+        static_cast<GuestAddress>(size_out)));
+}
+
 std::uint64_t kernel_mprotect(std::uint64_t address, std::uint64_t size,
                               std::uint64_t protection) {
     auto* services = kernel_services();
@@ -885,6 +1058,51 @@ void register_core(runtime::HleRegistry& registry) {
                                      "sceKernelSleep");
     (void)registry.register_no_arg(key("pO96TwzOm5E"), direct_memory_size,
                                    "sceKernelGetDirectMemorySize");
+    (void)registry.register_function(key("rVjRvHJ0X6c"),
+                                     reinterpret_cast<GuestAddress>(&kernel_virtual_query),
+                                     "sceKernelVirtualQuery");
+    (void)registry.register_function(
+        key("WFcfL2lzido"), reinterpret_cast<GuestAddress>(&kernel_query_memory_protection),
+        "sceKernelQueryMemoryProtection");
+    (void)registry.register_function(
+        key("C0f7TJcbfac"), reinterpret_cast<GuestAddress>(&kernel_available_direct_memory),
+        "sceKernelAvailableDirectMemorySize");
+    (void)registry.register_function(
+        key("rTXw65xmLIA"), reinterpret_cast<GuestAddress>(&kernel_allocate_direct_memory),
+        "sceKernelAllocateDirectMemory");
+    (void)registry.register_function(
+        key("B+vc2AO2Zrc"), reinterpret_cast<GuestAddress>(&kernel_allocate_main_direct_memory),
+        "sceKernelAllocateMainDirectMemory");
+    (void)registry.register_function(
+        key("MBuItvba6z8"), reinterpret_cast<GuestAddress>(&kernel_release_direct_memory),
+        "sceKernelReleaseDirectMemory");
+    (void)registry.register_function(
+        key("hwVSPCmp5tM"), reinterpret_cast<GuestAddress>(&kernel_checked_release_direct_memory),
+        "sceKernelCheckedReleaseDirectMemory");
+    (void)registry.register_function(
+        key("L-Q3LEjIbgA"), reinterpret_cast<GuestAddress>(&kernel_map_direct_memory),
+        "sceKernelMapDirectMemory");
+    (void)registry.register_function(
+        key("NcaWUxfMNIQ"), reinterpret_cast<GuestAddress>(&kernel_map_named_direct_memory),
+        "sceKernelMapNamedDirectMemory");
+    (void)registry.register_function(
+        key("BHouLQzh0X0"), reinterpret_cast<GuestAddress>(&kernel_direct_memory_query),
+        "sceKernelDirectMemoryQuery");
+    (void)registry.register_function(
+        key("mL8NDH86iQI"), reinterpret_cast<GuestAddress>(&kernel_map_named_flexible_memory),
+        "sceKernelMapNamedFlexibleMemory");
+    (void)registry.register_function(
+        key("IWIBBdTHit4"), reinterpret_cast<GuestAddress>(&kernel_map_flexible_memory),
+        "sceKernelMapFlexibleMemory");
+    (void)registry.register_function(
+        key("4h6F1LLbTiw"), reinterpret_cast<GuestAddress>(&kernel_map_flexible_memory),
+        "sceKernelMapFlexibleMemory");
+    (void)registry.register_function(
+        key("aNz11fnnzi4"), reinterpret_cast<GuestAddress>(&kernel_available_flexible_memory),
+        "sceKernelAvailableFlexibleMemorySize");
+    (void)registry.register_function(
+        key("n1-v6FgU7MQ"), reinterpret_cast<GuestAddress>(&kernel_configured_flexible_memory),
+        "sceKernelConfiguredFlexibleMemorySize");
     (void)registry.register_function(key("vSMAm3cxYTY"),
                                      reinterpret_cast<GuestAddress>(&kernel_mprotect),
                                      "sceKernelMprotect");

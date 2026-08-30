@@ -85,6 +85,73 @@ struct GuestFileStat {
 static_assert(sizeof(GuestStatTimespec) == 16);
 static_assert(sizeof(GuestFileStat) == 120);
 
+struct GuestVirtualQueryInfo {
+    std::uint64_t start{};
+    std::uint64_t end{};
+    std::uint64_t offset{};
+    std::int32_t protection{};
+    std::int32_t memory_type{};
+    std::uint32_t flags{};
+    char name[32]{};
+    std::uint8_t gpu_mask_id{};
+    std::uint8_t reserved{};
+    std::uint16_t padding{};
+};
+
+static_assert(sizeof(GuestVirtualQueryInfo) == 72);
+static_assert(offsetof(GuestVirtualQueryInfo, flags) == 32);
+static_assert(offsetof(GuestVirtualQueryInfo, name) == 36);
+static_assert(offsetof(GuestVirtualQueryInfo, gpu_mask_id) == 68);
+
+struct GuestDirectQueryInfo {
+    std::uint64_t start{};
+    std::uint64_t end{};
+    std::int32_t memory_type{};
+    std::uint32_t padding{};
+};
+
+static_assert(sizeof(GuestDirectQueryInfo) == 24);
+
+constexpr std::uint32_t kVirtualFlexible = 1U << 0U;
+constexpr std::uint32_t kVirtualDirect = 1U << 1U;
+constexpr std::uint32_t kVirtualStack = 1U << 2U;
+constexpr std::uint32_t kVirtualPooled = 1U << 3U;
+constexpr std::uint32_t kVirtualCommitted = 1U << 4U;
+constexpr std::uint32_t kDirectMapIgnoredFlag = 0x0008U;
+constexpr std::uint32_t kDirectMapFlags =
+    kDirectMapIgnoredFlag | kMapFixed | kMapNoOverwrite | kMapNoCoalesce;
+
+std::optional<GuestAddress> align_up_multiple(GuestAddress value, GuestSize alignment) noexcept {
+    if (alignment == 0) {
+        return value;
+    }
+    const auto remainder = value % alignment;
+    if (remainder == 0) {
+        return value;
+    }
+    const auto increment = alignment - remainder;
+    if (value > std::numeric_limits<GuestAddress>::max() - increment) {
+        return std::nullopt;
+    }
+    return value + increment;
+}
+
+std::uint32_t guest_protection(const memory::RegionInfo& region) noexcept {
+    if (!region.committed || region.kind == memory::RegionKind::reserved) {
+        return 0;
+    }
+    std::uint32_t result = region.auxiliary_protection;
+    if (memory::has(region.protection, memory::Protection::write)) {
+        result |= 0x02U;
+    } else if (memory::has(region.protection, memory::Protection::read)) {
+        result |= 0x01U;
+    }
+    if (memory::has(region.protection, memory::Protection::execute)) {
+        result |= 0x04U;
+    }
+    return result;
+}
+
 bool supported_mutex_type(std::uint32_t type) noexcept {
     return type >= KernelServices::kMutexTypeErrorCheck &&
            type <= KernelServices::kMutexTypeAdaptive;
@@ -315,7 +382,22 @@ bool path_is_within(const std::filesystem::path& root, const std::filesystem::pa
 
 } // namespace
 
-KernelServices::KernelServices(memory::GuestAddressSpace& memory) : memory_(memory) {}
+KernelServices::KernelServices(memory::GuestAddressSpace& memory) : memory_(memory) {
+    if (!memory_.native_backed()) {
+        return;
+    }
+    const auto aligned = checked_align_up(memory_.native_base(), kGuestPageSize);
+    if (!aligned || memory_.native_base() >
+                        std::numeric_limits<GuestAddress>::max() - memory_.native_size()) {
+        return;
+    }
+    const auto native_end = memory_.native_base() + memory_.native_size();
+    if (*aligned >= native_end) {
+        return;
+    }
+    managed_base_ = *aligned;
+    managed_size_ = (native_end - managed_base_) / kGuestPageSize * kGuestPageSize;
+}
 
 bool KernelServices::set_guest_root(const std::filesystem::path& root) {
     std::error_code error;
@@ -331,8 +413,676 @@ std::int64_t KernelServices::error(std::uint32_t value) noexcept {
     return static_cast<std::int64_t>(static_cast<std::int32_t>(value));
 }
 
-std::uint64_t KernelServices::direct_memory_size() const noexcept {
-    return memory_.native_backed() ? memory_.native_size() : 0;
+bool KernelServices::set_flexible_memory_size(GuestSize size) {
+    if (size % kGuestPageSize != 0 || size > managed_size_) {
+        return false;
+    }
+    std::scoped_lock lock(vm_mutex_);
+    if (!direct_allocations_.empty() || flexible_used_ != 0 || !memory_.regions().empty()) {
+        return false;
+    }
+    flexible_capacity_ = size;
+    return true;
+}
+
+GuestSize KernelServices::direct_capacity_locked() const noexcept {
+    return managed_size_ >= flexible_capacity_ ? managed_size_ - flexible_capacity_ : 0;
+}
+
+GuestAddress KernelServices::direct_virtual_address(GuestAddress physical_address) const noexcept {
+    return managed_base_ + physical_address;
+}
+
+GuestAddress KernelServices::flexible_base_locked() const noexcept {
+    return managed_base_ + direct_capacity_locked();
+}
+
+std::uint64_t KernelServices::direct_memory_size() const {
+    std::scoped_lock lock(vm_mutex_);
+    return direct_capacity_locked();
+}
+
+std::uint64_t KernelServices::configured_flexible_memory_size() const {
+    std::scoped_lock lock(vm_mutex_);
+    return flexible_capacity_;
+}
+
+std::uint64_t KernelServices::available_flexible_memory_size() const {
+    std::scoped_lock lock(vm_mutex_);
+    return flexible_capacity_ >= flexible_used_ ? flexible_capacity_ - flexible_used_ : 0;
+}
+
+std::vector<KernelServices::PhysicalRange> KernelServices::direct_blocked_ranges_locked() const {
+    std::vector<PhysicalRange> blocked;
+    blocked.reserve(direct_allocations_.size() + memory_.regions().size());
+    for (const auto& [base, allocation] : direct_allocations_) {
+        blocked.emplace_back(base, base + allocation.size);
+    }
+    const auto capacity = direct_capacity_locked();
+    const auto canonical_end = managed_base_ + capacity;
+    for (const auto& region : memory_.regions()) {
+        if (region.base >= canonical_end ||
+            region.base > std::numeric_limits<GuestAddress>::max() - region.size ||
+            region.base + region.size <= managed_base_) {
+            continue;
+        }
+        const auto overlap_base = std::max(region.base, managed_base_);
+        const auto overlap_end = std::min(region.base + region.size, canonical_end);
+        blocked.emplace_back(overlap_base - managed_base_, overlap_end - managed_base_);
+    }
+    std::sort(blocked.begin(), blocked.end());
+    return blocked;
+}
+
+std::int64_t KernelServices::configured_flexible_memory_size_to(GuestAddress size_out) {
+    if (!guest_writable(size_out, sizeof(std::uint64_t))) {
+        return error(kErrorEfault);
+    }
+    return write_guest_u64(size_out, configured_flexible_memory_size()) ? 0 : error(kErrorEfault);
+}
+
+std::int64_t KernelServices::available_flexible_memory_size_to(GuestAddress size_out) {
+    if (!guest_writable(size_out, sizeof(std::uint64_t))) {
+        return error(kErrorEfault);
+    }
+    return write_guest_u64(size_out, available_flexible_memory_size()) ? 0 : error(kErrorEfault);
+}
+
+std::int64_t KernelServices::direct_memory_query(std::int64_t physical_address, int flags,
+                                                 GuestAddress info_address, GuestSize info_size) {
+    if (physical_address < 0 || (flags != 0 && flags != 1) ||
+        info_size != sizeof(GuestDirectQueryInfo) ||
+        !guest_writable(info_address, sizeof(GuestDirectQueryInfo))) {
+        return error(kErrorEinval);
+    }
+    const auto offset = static_cast<GuestAddress>(physical_address);
+    std::scoped_lock lock(vm_mutex_);
+    auto selected = direct_allocations_.end();
+    for (auto it = direct_allocations_.begin(); it != direct_allocations_.end(); ++it) {
+        const auto end = it->first + it->second.size;
+        if (offset >= it->first && offset < end) {
+            selected = it;
+            break;
+        }
+        if (flags == 1 && offset < it->first) {
+            selected = it;
+            break;
+        }
+    }
+    if (selected == direct_allocations_.end()) {
+        return error(kErrorEacces);
+    }
+
+    GuestDirectQueryInfo info{};
+    info.start = selected->first;
+    info.end = selected->first + selected->second.size;
+    info.memory_type = selected->second.memory_type;
+    auto next = std::next(selected);
+    while (next != direct_allocations_.end() && next->first == info.end &&
+           next->second.memory_type == info.memory_type) {
+        info.end += next->second.size;
+        ++next;
+    }
+    return memory_.write(info_address, std::as_bytes(std::span{&info, std::size_t{1}}))
+               ? 0
+               : error(kErrorEfault);
+}
+
+bool KernelServices::direct_range_has_allocation_locked(GuestAddress base, GuestSize size) const {
+    if (size == 0 || base > direct_capacity_locked() || size > direct_capacity_locked() - base) {
+        return false;
+    }
+    GuestAddress cursor = base;
+    const auto end = base + size;
+    for (const auto& [allocation_base, allocation] : direct_allocations_) {
+        if (allocation_base > cursor) {
+            return false;
+        }
+        if (allocation_base > std::numeric_limits<GuestAddress>::max() - allocation.size) {
+            return false;
+        }
+        const auto allocation_end = allocation_base + allocation.size;
+        if (allocation_end <= cursor) {
+            continue;
+        }
+        cursor = std::min(end, allocation_end);
+        if (cursor == end) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool KernelServices::direct_range_covered_locked(GuestAddress base, GuestSize size,
+                                                  std::int32_t& memory_type) const {
+    if (!direct_range_has_allocation_locked(base, size)) {
+        return false;
+    }
+    const auto end = base + size;
+    bool found = false;
+    for (const auto& [allocation_base, allocation] : direct_allocations_) {
+        const auto allocation_end = allocation_base + allocation.size;
+        if (allocation_end <= base || allocation_base >= end) {
+            continue;
+        }
+        if (!found) {
+            memory_type = allocation.memory_type;
+            found = true;
+        } else if (memory_type != allocation.memory_type) {
+            return false;
+        }
+    }
+    return found;
+}
+
+std::int64_t KernelServices::virtual_query(GuestAddress address, int flags,
+                                           GuestAddress info_address, GuestSize info_size) {
+    if ((flags != 0 && flags != 1) || info_size != sizeof(GuestVirtualQueryInfo) ||
+        !guest_writable(info_address, sizeof(GuestVirtualQueryInfo))) {
+        return error(kErrorEinval);
+    }
+
+    const auto regions = memory_.regions();
+    const memory::RegionInfo* selected = nullptr;
+    for (const auto& region : regions) {
+        if (region.base > std::numeric_limits<GuestAddress>::max() - region.size) {
+            continue;
+        }
+        const auto end = region.base + region.size;
+        if (address >= region.base && address < end) {
+            selected = &region;
+            break;
+        }
+        if (flags == 1 && address < region.base) {
+            selected = &region;
+            break;
+        }
+    }
+    if (selected == nullptr) {
+        return error(kErrorEacces);
+    }
+
+    GuestVirtualQueryInfo info{};
+    info.start = selected->base;
+    info.end = selected->base + selected->size;
+    info.offset = selected->kind == memory::RegionKind::direct ? selected->offset : 0;
+    info.protection = static_cast<std::int32_t>(guest_protection(*selected));
+    info.memory_type = selected->kind == memory::RegionKind::direct ? selected->memory_type : 0;
+    if (selected->kind == memory::RegionKind::flexible) {
+        info.flags |= kVirtualFlexible;
+    }
+    if (selected->kind == memory::RegionKind::direct) {
+        info.flags |= kVirtualDirect;
+    }
+    if (selected->kind == memory::RegionKind::stack) {
+        info.flags |= kVirtualStack;
+    }
+    if (selected->committed) {
+        info.flags |= kVirtualCommitted;
+    }
+    (void)kVirtualPooled;
+    const auto name_size = std::min(selected->name.size(), sizeof(info.name) - 1U);
+    std::memcpy(info.name, selected->name.data(), name_size);
+    const auto bytes = std::as_bytes(std::span{&info, std::size_t{1}});
+    return memory_.write(info_address, bytes) ? 0 : error(kErrorEfault);
+}
+
+std::int64_t KernelServices::query_memory_protection(GuestAddress address,
+                                                     GuestAddress start_address,
+                                                     GuestAddress end_address,
+                                                     GuestAddress protection_address) {
+    if (!guest_writable(start_address, sizeof(std::uint64_t)) ||
+        !guest_writable(end_address, sizeof(std::uint64_t)) ||
+        !guest_writable(protection_address, sizeof(std::uint32_t))) {
+        return error(kErrorEfault);
+    }
+    const auto* region = memory_.find(address);
+    if (region == nullptr || region->base > std::numeric_limits<GuestAddress>::max() - region->size) {
+        return error(kErrorEacces);
+    }
+    const auto end = region->base + region->size;
+    const auto protection = guest_protection(*region);
+    if (!write_guest_u64(start_address, region->base) || !write_guest_u64(end_address, end) ||
+        !write_guest_u32(protection_address, protection)) {
+        return error(kErrorEfault);
+    }
+    return 0;
+}
+
+std::int64_t KernelServices::available_direct_memory(
+    std::int64_t search_start, std::int64_t search_end, GuestSize alignment,
+    GuestAddress physical_address_out, GuestAddress size_out) {
+    if (!guest_writable(physical_address_out, sizeof(std::uint64_t)) ||
+        !guest_writable(size_out, sizeof(std::uint64_t)) || search_start < 0 || search_end < 0 ||
+        search_start >= search_end ||
+        (alignment != 0 && (alignment < kGuestPageSize || alignment % kGuestPageSize != 0))) {
+        return error(kErrorEinval);
+    }
+    if (alignment == 0) {
+        alignment = kGuestPageSize;
+    }
+    std::scoped_lock lock(vm_mutex_);
+    const auto capacity = direct_capacity_locked();
+    const auto start = std::min<GuestAddress>(static_cast<GuestAddress>(search_start), capacity);
+    const auto end = std::min<GuestAddress>(static_cast<GuestAddress>(search_end), capacity);
+    if (start >= end) {
+        return error(kErrorEnomem);
+    }
+
+    std::vector<PhysicalRange> blocked;
+    try {
+        blocked = direct_blocked_ranges_locked();
+    } catch (const std::bad_alloc&) {
+        return error(kErrorEnomem);
+    }
+
+    GuestAddress best_base{};
+    GuestSize best_size{};
+    GuestAddress cursor = start;
+    auto consider_gap = [&](GuestAddress gap_begin, GuestAddress gap_end) {
+        const auto aligned = align_up_multiple(gap_begin, alignment);
+        if (!aligned || *aligned >= gap_end) {
+            return;
+        }
+        const auto available = gap_end - *aligned;
+        if (available > best_size) {
+            best_base = *aligned;
+            best_size = available;
+        }
+    };
+    for (const auto& [blocked_begin_raw, blocked_end_raw] : blocked) {
+        if (blocked_end_raw <= start || blocked_begin_raw >= end) {
+            continue;
+        }
+        const auto blocked_begin = std::max(blocked_begin_raw, start);
+        const auto blocked_end = std::min(blocked_end_raw, end);
+        if (blocked_begin > cursor) {
+            consider_gap(cursor, blocked_begin);
+        }
+        cursor = std::max(cursor, blocked_end);
+        if (cursor >= end) {
+            break;
+        }
+    }
+    if (cursor < end) {
+        consider_gap(cursor, end);
+    }
+    if (best_size == 0) {
+        return error(kErrorEnomem);
+    }
+    if (!write_guest_u64(physical_address_out, best_base) || !write_guest_u64(size_out, best_size)) {
+        return error(kErrorEfault);
+    }
+    return 0;
+}
+
+std::int64_t KernelServices::allocate_direct_memory(
+    std::int64_t search_start, std::int64_t search_end, GuestSize size, GuestSize alignment,
+    int memory_type, GuestAddress physical_address_out) {
+    if (!guest_writable(physical_address_out, sizeof(std::uint64_t)) || search_start < 0 ||
+        search_end < 0 || search_start >= search_end || size == 0 || size % kGuestPageSize != 0 ||
+        (alignment != 0 && (alignment < kGuestPageSize || alignment % kGuestPageSize != 0)) ||
+        memory_type < 0) {
+        return error(kErrorEinval);
+    }
+    if (alignment == 0) {
+        alignment = kGuestPageSize;
+    }
+    std::scoped_lock lock(vm_mutex_);
+    const auto capacity = direct_capacity_locked();
+    const auto start = std::min<GuestAddress>(static_cast<GuestAddress>(search_start), capacity);
+    const auto end = std::min<GuestAddress>(static_cast<GuestAddress>(search_end), capacity);
+    if (start >= end || size > end - start) {
+        return error(kErrorEagain);
+    }
+
+    std::vector<PhysicalRange> blocked;
+    try {
+        blocked = direct_blocked_ranges_locked();
+    } catch (const std::bad_alloc&) {
+        return error(kErrorEnomem);
+    }
+    GuestAddress candidate = start;
+    bool found = false;
+    for (const auto& [blocked_begin, blocked_end] : blocked) {
+        if (blocked_end <= start || blocked_begin >= end) {
+            continue;
+        }
+        const auto aligned = align_up_multiple(candidate, alignment);
+        if (!aligned) {
+            return error(kErrorEnomem);
+        }
+        if (*aligned <= end && size <= end - *aligned &&
+            blocked_begin >= *aligned && size <= blocked_begin - *aligned) {
+            candidate = *aligned;
+            found = true;
+            break;
+        }
+        candidate = std::max(candidate, blocked_end);
+    }
+    if (!found) {
+        const auto aligned = align_up_multiple(candidate, alignment);
+        if (aligned && *aligned <= end && size <= end - *aligned) {
+            candidate = *aligned;
+            found = true;
+        }
+    }
+    if (!found) {
+        return error(kErrorEagain);
+    }
+
+    const auto canonical = direct_virtual_address(candidate);
+    const auto staging = memory::Protection::read | memory::Protection::write;
+    try {
+        if (!memory_.map(canonical, size, staging, "direct-init") ||
+            !memory_.zero(canonical, size) || !memory_.unmap(canonical, size)) {
+            if (memory_.find(canonical) != nullptr) {
+                (void)memory_.unmap_range(canonical, size);
+            }
+            return error(kErrorEnomem);
+        }
+        direct_allocations_.emplace(candidate,
+                                    DirectAllocation{size, static_cast<std::int32_t>(memory_type)});
+    } catch (const std::bad_alloc&) {
+        return error(kErrorEnomem);
+    }
+    if (!write_guest_u64(physical_address_out, candidate)) {
+        direct_allocations_.erase(candidate);
+        return error(kErrorEfault);
+    }
+    return 0;
+}
+
+std::int64_t KernelServices::release_direct_memory(GuestAddress physical_address, GuestSize size,
+                                                   bool checked) {
+    if (size == 0) {
+        return 0;
+    }
+    std::scoped_lock lock(vm_mutex_);
+    const auto capacity = direct_capacity_locked();
+    if (physical_address % kGuestPageSize != 0 || size % kGuestPageSize != 0 ||
+        physical_address > capacity || size > capacity - physical_address) {
+        return error(kErrorEinval);
+    }
+
+    if (checked && !direct_range_has_allocation_locked(physical_address, size)) {
+        return error(kErrorEnoent);
+    }
+    const auto release_end = physical_address + size;
+    std::map<GuestAddress, DirectAllocation> next;
+    std::vector<std::pair<GuestAddress, GuestAddress>> release_segments;
+    try {
+        for (const auto& [base, allocation] : direct_allocations_) {
+            const auto end = base + allocation.size;
+            if (end <= physical_address || base >= release_end) {
+                next.emplace(base, allocation);
+                continue;
+            }
+
+            const auto overlap_begin = std::max(base, physical_address);
+            const auto overlap_end = std::min(end, release_end);
+            if (!release_segments.empty() && release_segments.back().second == overlap_begin) {
+                release_segments.back().second = overlap_end;
+            } else {
+                release_segments.emplace_back(overlap_begin, overlap_end);
+            }
+            if (base < physical_address) {
+                next.emplace(base, DirectAllocation{physical_address - base, allocation.memory_type});
+            }
+            if (end > release_end) {
+                next.emplace(release_end, DirectAllocation{end - release_end, allocation.memory_type});
+            }
+        }
+    } catch (const std::bad_alloc&) {
+        return error(kErrorEnomem);
+    }
+    if (release_segments.empty()) {
+        return 0;
+    }
+
+    const auto regions = memory_.regions();
+    for (const auto& [segment_begin, segment_end] : release_segments) {
+        const auto canonical = direct_virtual_address(segment_begin);
+        const auto segment_size = segment_end - segment_begin;
+        for (const auto& region : regions) {
+            if (!ranges_overlap(canonical, segment_size, region)) {
+                continue;
+            }
+            if (region.kind != memory::RegionKind::direct || region.base < managed_base_ ||
+                region.offset != region.base - managed_base_) {
+                return error(kErrorEnotsup);
+            }
+        }
+    }
+
+    try {
+        for (const auto& [segment_begin, segment_end] : release_segments) {
+            const auto canonical = direct_virtual_address(segment_begin);
+            if (!memory_.unmap_range(canonical, segment_end - segment_begin)) {
+                return error(kErrorEnomem);
+            }
+        }
+    } catch (const std::bad_alloc&) {
+        return error(kErrorEnomem);
+    }
+    direct_allocations_.swap(next);
+    return 0;
+}
+
+std::int64_t KernelServices::map_direct_memory(
+    GuestAddress address_slot, GuestSize size, std::uint32_t protection, std::uint32_t flags,
+    std::int64_t physical_address, GuestSize alignment, GuestAddress name_address) {
+    if (!guest_writable(address_slot, sizeof(std::uint64_t)) || physical_address < 0 || size == 0 ||
+        size % kGuestPageSize != 0 ||
+        (alignment != 0 && (alignment < kGuestPageSize || alignment % kGuestPageSize != 0)) ||
+        (flags & ~kDirectMapFlags) != 0 || (protection & 0x04U) != 0) {
+        return error(kErrorEinval);
+    }
+    if (alignment == 0) {
+        alignment = kGuestPageSize;
+    }
+    const auto host_protection = cpu_protection(protection);
+    if (!host_protection) {
+        return error(kErrorEinval);
+    }
+    std::uint64_t requested{};
+    if (!read_guest_u64(address_slot, requested)) {
+        return error(kErrorEfault);
+    }
+    std::string name = "direct";
+    if (name_address != 0) {
+        if (!read_guest_c_string(name_address, name)) {
+            return error(kErrorEfault);
+        }
+        if (name.size() >= 32) {
+            return error(kErrorEnametoolong);
+        }
+    }
+
+    const auto physical = static_cast<GuestAddress>(physical_address);
+    std::scoped_lock lock(vm_mutex_);
+    std::int32_t memory_type{};
+    if (!direct_range_covered_locked(physical, size, memory_type)) {
+        return error(kErrorEacces);
+    }
+    const auto canonical = direct_virtual_address(physical);
+    if (canonical % alignment != 0) {
+        return error(kErrorEnotsup);
+    }
+    if (requested != 0 && requested != canonical) {
+        return error(kErrorEnotsup);
+    }
+    bool has_overlap = false;
+    for (const auto& region : memory_.regions()) {
+        if (!ranges_overlap(canonical, size, region)) {
+            continue;
+        }
+        has_overlap = true;
+        if ((flags & kMapNoOverwrite) != 0) {
+            return error(kErrorEnomem);
+        }
+        if (region.kind != memory::RegionKind::direct || region.base < managed_base_ ||
+            region.offset != region.base - managed_base_) {
+            return error(kErrorEnotsup);
+        }
+    }
+    if (has_overlap && !memory_.unmap_range(canonical, size)) {
+        return error(kErrorEnomem);
+    }
+
+    memory::RegionInfo info{
+        .base = canonical,
+        .size = size,
+        .protection = *host_protection,
+        .name = std::move(name),
+        .offset = physical,
+        .memory_type = memory_type,
+        .kind = memory::RegionKind::direct,
+        .committed = true,
+        .auxiliary_protection = protection & 0x30U,
+    };
+    try {
+        if (!memory_.map(std::move(info))) {
+            return error(kErrorEnomem);
+        }
+    } catch (const std::bad_alloc&) {
+        return error(kErrorEnomem);
+    }
+    if (!write_guest_u64(address_slot, canonical)) {
+        (void)memory_.unmap_range(canonical, size);
+        return error(kErrorEfault);
+    }
+    return 0;
+}
+
+std::int64_t KernelServices::map_flexible_memory(
+    GuestAddress address_slot, GuestSize size, std::uint32_t protection, std::uint32_t flags,
+    GuestAddress name_address) {
+    if (!guest_writable(address_slot, sizeof(std::uint64_t)) || size == 0 ||
+        size % kGuestPageSize != 0 || (flags & ~(kMapFixed | kMapNoOverwrite | kMapNoCoalesce)) != 0 ||
+        (protection & 0x04U) != 0) {
+        return error(kErrorEinval);
+    }
+    const auto host_protection = cpu_protection(protection);
+    if (!host_protection) {
+        return error(kErrorEinval);
+    }
+    std::uint64_t requested{};
+    if (!read_guest_u64(address_slot, requested)) {
+        return error(kErrorEfault);
+    }
+    std::string name = "flexible";
+    if (name_address != 0) {
+        if (!read_guest_c_string(name_address, name)) {
+            return error(kErrorEfault);
+        }
+        if (name.size() >= 32) {
+            return error(kErrorEnametoolong);
+        }
+    }
+
+    std::scoped_lock lock(vm_mutex_);
+    if (flexible_capacity_ == 0) {
+        return error(kErrorEnomem);
+    }
+    const auto flex_begin = flexible_base_locked();
+    const auto flex_end = flex_begin + flexible_capacity_;
+    GuestAddress target{};
+    if ((flags & kMapFixed) != 0) {
+        if (requested % kGuestPageSize != 0 || requested < flex_begin || requested > flex_end ||
+            size > flex_end - requested) {
+            return error(kErrorEinval);
+        }
+        target = requested;
+        GuestSize replaced_flexible{};
+        for (const auto& region : memory_.regions()) {
+            if (!ranges_overlap(target, size, region)) {
+                continue;
+            }
+            if ((flags & kMapNoOverwrite) != 0) {
+                return error(kErrorEnomem);
+            }
+            if (region.kind != memory::RegionKind::flexible &&
+                region.kind != memory::RegionKind::reserved) {
+                return error(kErrorEnotsup);
+            }
+            if (region.kind == memory::RegionKind::flexible) {
+                const auto overlap_begin = std::max(target, region.base);
+                const auto overlap_end =
+                    std::min(target + size, region.base + region.size);
+                replaced_flexible += overlap_end - overlap_begin;
+            }
+        }
+        const auto available = flexible_capacity_ - std::min(flexible_used_, flexible_capacity_);
+        if (size > available + replaced_flexible) {
+            return error(kErrorEnomem);
+        }
+        if (!memory_.unmap_range(target, size)) {
+            return error(kErrorEnomem);
+        }
+        flexible_used_ -= std::min(flexible_used_, replaced_flexible);
+    } else {
+        const auto available = flexible_capacity_ - std::min(flexible_used_, flexible_capacity_);
+        if (size > available) {
+            return error(kErrorEnomem);
+        }
+        GuestAddress cursor = flex_begin;
+        bool found = false;
+        for (const auto& region : memory_.regions()) {
+            if (region.base > std::numeric_limits<GuestAddress>::max() - region.size ||
+                region.base + region.size <= flex_begin || region.base >= flex_end) {
+                continue;
+            }
+            if (cursor <= region.base && size <= region.base - cursor) {
+                target = cursor;
+                found = true;
+                break;
+            }
+            cursor = std::max(cursor, region.base + region.size);
+        }
+        if (!found && cursor <= flex_end && size <= flex_end - cursor) {
+            target = cursor;
+            found = true;
+        }
+        if (!found) {
+            return error(kErrorEnomem);
+        }
+    }
+
+    const auto staging = memory::Protection::read | memory::Protection::write;
+    memory::RegionInfo info{
+        .base = target,
+        .size = size,
+        .protection = staging,
+        .name = std::move(name),
+        .kind = memory::RegionKind::flexible,
+        .committed = true,
+        .auxiliary_protection = protection & 0x30U,
+    };
+    try {
+        if (!memory_.map(std::move(info)) || !memory_.zero(target, size)) {
+            if (memory_.find(target) != nullptr) {
+                (void)memory_.unmap_range(target, size);
+            }
+            return error(kErrorEnomem);
+        }
+        if (*host_protection != staging && !memory_.protect(target, size, *host_protection)) {
+            (void)memory_.unmap_range(target, size);
+            return error(kErrorEnomem);
+        }
+    } catch (const std::bad_alloc&) {
+        if (memory_.find(target) != nullptr) {
+            (void)memory_.unmap_range(target, size);
+        }
+        return error(kErrorEnomem);
+    }
+    flexible_used_ += size;
+    if (!write_guest_u64(address_slot, target)) {
+        (void)memory_.unmap_range(target, size);
+        flexible_used_ -= size;
+        return error(kErrorEfault);
+    }
+    return 0;
 }
 
 std::int64_t KernelServices::mprotect(GuestAddress address, GuestSize size,
@@ -503,8 +1253,17 @@ std::int64_t KernelServices::map_memory(GuestAddress address, GuestSize size,
                     return error(kErrorEnomem);
                 }
             }
-        } else if (!memory_.unmap_range(aligned_address, *aligned_size)) {
-            return error(kErrorEnomem);
+        } else {
+            for (const auto& region : memory_.regions()) {
+                if (ranges_overlap(aligned_address, *aligned_size, region) &&
+                    (region.kind == memory::RegionKind::direct ||
+                     region.kind == memory::RegionKind::flexible)) {
+                    return error(kErrorEnotsup);
+                }
+            }
+            if (!memory_.unmap_range(aligned_address, *aligned_size)) {
+                return error(kErrorEnomem);
+            }
         }
         mapped_address = aligned_address;
     } else {
@@ -517,8 +1276,21 @@ std::int64_t KernelServices::map_memory(GuestAddress address, GuestSize size,
 
     const auto staging = memory::Protection::read | memory::Protection::write;
     try {
-        if (!memory_.map(mapped_address, *aligned_size, reserved ? memory::Protection::none : staging,
-                         std::move(mapping_name))) {
+        memory::RegionInfo region{
+            .base = mapped_address,
+            .size = *aligned_size,
+            .protection = reserved ? memory::Protection::none : staging,
+            .name = std::move(mapping_name),
+            .offset = file_mapping ? static_cast<std::uint64_t>(offset) : 0,
+            .memory_type = 0,
+            .kind = reserved ? memory::RegionKind::reserved
+                    : stack ? memory::RegionKind::stack
+                    : file_mapping ? memory::RegionKind::file
+                                   : memory::RegionKind::anonymous,
+            .committed = !reserved,
+            .auxiliary_protection = 0,
+        };
+        if (!memory_.map(std::move(region))) {
             return error(kErrorEnomem);
         }
         if (reserved) {
@@ -575,11 +1347,28 @@ std::int64_t KernelServices::unmap_memory(GuestAddress address, GuestSize size) 
     if (!aligned_size || !range_inside_native(memory_, aligned_address, *aligned_size)) {
         return error(kErrorEinval);
     }
+
+    std::scoped_lock lock(vm_mutex_);
+    GuestSize released_flexible{};
+    for (const auto& region : memory_.regions()) {
+        if (region.kind != memory::RegionKind::flexible ||
+            !ranges_overlap(aligned_address, *aligned_size, region)) {
+            continue;
+        }
+        const auto overlap_begin = std::max(aligned_address, region.base);
+        const auto overlap_end =
+            std::min(aligned_address + *aligned_size, region.base + region.size);
+        released_flexible += overlap_end - overlap_begin;
+    }
     try {
-        return memory_.unmap_range(aligned_address, *aligned_size) ? 0 : error(kErrorEinval);
+        if (!memory_.unmap_range(aligned_address, *aligned_size)) {
+            return error(kErrorEinval);
+        }
     } catch (const std::bad_alloc&) {
         return error(kErrorEnomem);
     }
+    flexible_used_ -= std::min(flexible_used_, released_flexible);
+    return 0;
 }
 
 bool KernelServices::read_guest_u64(GuestAddress address, std::uint64_t& value) const {
