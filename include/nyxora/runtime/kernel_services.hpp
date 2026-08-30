@@ -27,6 +27,7 @@ public:
     static constexpr std::uint32_t kErrorEfault = 0x8002000eU;
     static constexpr std::uint32_t kErrorEinval = 0x80020016U;
     static constexpr std::uint32_t kErrorEnotty = 0x80020019U;
+    static constexpr std::uint32_t kErrorEnotsup = 0x8002002dU;
 
     static constexpr int kPosixEperm = 1;
     static constexpr int kPosixEbadf = 9;
@@ -35,6 +36,7 @@ public:
     static constexpr int kPosixEbusy = 16;
     static constexpr int kPosixEinval = 22;
     static constexpr int kPosixEnotty = 25;
+    static constexpr int kPosixEnotsup = 45;
     static constexpr int kPosixEtimedout = 60;
     static constexpr int kPosixEagain = 35;
     static constexpr int kPosixEoverflow = 84;
@@ -46,6 +48,13 @@ public:
     [[nodiscard]] std::uint64_t direct_memory_size() const noexcept;
     [[nodiscard]] std::int64_t mprotect(GuestAddress address, GuestSize size,
                                         std::uint32_t protection);
+    [[nodiscard]] std::int64_t map_memory(GuestAddress address, GuestSize size,
+                                          std::uint32_t protection, std::uint32_t flags, int fd,
+                                          std::int64_t offset);
+    [[nodiscard]] std::int64_t map_memory_to(GuestAddress address, GuestSize size,
+                                             std::uint32_t protection, std::uint32_t flags, int fd,
+                                             std::int64_t offset, GuestAddress output_address);
+    [[nodiscard]] std::int64_t unmap_memory(GuestAddress address, GuestSize size);
 
     [[nodiscard]] std::int64_t open_readonly(GuestAddress path_address, std::uint32_t flags,
                                              std::uint16_t mode);
@@ -130,6 +139,7 @@ private:
         std::mutex mutex;
         std::ifstream file;
         std::filesystem::path path;
+        std::int64_t position{};
     };
 
     struct MutexAttributes {

@@ -160,7 +160,7 @@ NYXORA_TEST(libkernel_core_registers_process_time_and_cpu_hle) {
     nyxora::runtime::SymbolRegistry symbols;
     nyxora::runtime::HleRegistry hle(symbols);
     nyxora::hle::libkernel::register_core(hle);
-    NYXORA_CHECK(hle.size() == 166);
+    NYXORA_CHECK(hle.size() == 174);
 
     const auto frequency = symbols.resolve(libkernel_key("BNowx2l588E"));
     const auto cpu = symbols.resolve(libkernel_key("g0VTBxfJyu0"));
@@ -1524,6 +1524,210 @@ NYXORA_TEST(hle_registry_grows_beyond_one_windows_bridge_chunk) {
 #endif
 }
 
+
+NYXORA_TEST(libkernel_mmap_hle_maps_protects_and_partially_unmaps_anonymous_memory) {
+#if defined(__x86_64__) || defined(_M_X64)
+    constexpr nyxora::GuestSize guest_page = 16 * 1024;
+    const auto host_page = static_cast<nyxora::GuestSize>(nyxora::memory::NativeArena::page_size());
+    auto memory = nyxora::memory::GuestAddressSpace::reserve_native(guest_page * 10 + host_page);
+    NYXORA_CHECK(memory.has_value());
+    const auto aligned_base =
+        (memory->native_base() + guest_page - 1) / guest_page * guest_page;
+    NYXORA_CHECK(memory->map(aligned_base, guest_page,
+                             nyxora::memory::Protection::read |
+                                 nyxora::memory::Protection::write,
+                             "mmap-control"));
+
+    nyxora::runtime::KernelServices services(*memory);
+    nyxora::runtime::TlsRegistry tls;
+    nyxora::runtime::GuestThreadManager manager(tls, &services);
+    nyxora::runtime::SymbolRegistry symbols;
+    nyxora::runtime::HleRegistry hle(symbols);
+    nyxora::hle::libkernel::register_core(hle);
+    const auto mmap = symbols.resolve(libkernel_key("BPE9s9vQQXo"));
+    const auto mprotect = symbols.resolve(libkernel_key("YQOfxL4QfeU"));
+    const auto munmap = symbols.resolve(libkernel_key("UqDGjXA5yUM"));
+    const auto error = symbols.resolve(libkernel_key("9BcDykPmo1I"));
+    const auto kernel_mmap = symbols.resolve(libkernel_key("PGhQHd-dzv8"));
+    NYXORA_CHECK(mmap.has_value());
+    NYXORA_CHECK(mprotect.has_value());
+    NYXORA_CHECK(munmap.has_value());
+    NYXORA_CHECK(error.has_value());
+    NYXORA_CHECK(kernel_mmap.has_value());
+
+    nyxora::runtime::ScopedGuestThreadManager scope(manager);
+    const std::array<std::uint64_t, 6> anonymous_args{
+        0, guest_page + 1, 2, 0x1002, std::numeric_limits<std::uint64_t>::max(), 0};
+    const auto mapped = invoke_guest_sysv_call(mmap->address, anonymous_args);
+    NYXORA_CHECK(mapped != std::numeric_limits<std::uint64_t>::max());
+    NYXORA_CHECK(mapped % guest_page == 0);
+    const auto* mapped_region = memory->find(mapped);
+    NYXORA_CHECK(mapped_region != nullptr);
+    NYXORA_CHECK(mapped_region->size == guest_page * 2);
+    NYXORA_CHECK(mapped_region->protection ==
+                 (nyxora::memory::Protection::read | nyxora::memory::Protection::write));
+    const auto zero_prefix = memory->view(mapped, 64);
+    NYXORA_CHECK(std::all_of(zero_prefix.begin(), zero_prefix.end(),
+                             [](std::byte value) { return value == std::byte{0}; }));
+
+    const std::array<std::byte, 1> marker_byte{std::byte{0x7a}};
+    NYXORA_CHECK(memory->write(mapped, marker_byte));
+    const std::array<std::uint64_t, 3> protect_args{mapped, guest_page, 1};
+    NYXORA_CHECK(invoke_guest_sysv_call(mprotect->address, protect_args) == 0);
+    NYXORA_CHECK(!memory->write(mapped, marker_byte));
+    NYXORA_CHECK(memory->write(mapped + guest_page, marker_byte));
+
+    const std::array<std::uint64_t, 2> partial_unmap_args{mapped + guest_page + 1, 1};
+    NYXORA_CHECK(invoke_guest_sysv_call(munmap->address, partial_unmap_args) == 0);
+    NYXORA_CHECK(memory->find(mapped) != nullptr);
+    NYXORA_CHECK(memory->find(mapped + guest_page) == nullptr);
+    const std::array<std::uint64_t, 2> final_unmap_args{mapped, guest_page};
+    NYXORA_CHECK(invoke_guest_sysv_call(munmap->address, final_unmap_args) == 0);
+    NYXORA_CHECK(memory->find(mapped) == nullptr);
+
+    const auto fixed = aligned_base + guest_page * 4;
+    const std::array<std::uint64_t, 6> fixed_args{
+        fixed, guest_page, 2, 0x1012, std::numeric_limits<std::uint64_t>::max(), 0};
+    NYXORA_CHECK(invoke_guest_sysv_call(mmap->address, fixed_args) == fixed);
+    NYXORA_CHECK(memory->write(fixed, marker_byte));
+    const std::array<std::uint64_t, 6> no_overwrite_args{
+        fixed, guest_page, 2, 0x1092, std::numeric_limits<std::uint64_t>::max(), 0};
+    NYXORA_CHECK(invoke_guest_sysv_call(mmap->address, no_overwrite_args) ==
+                 std::numeric_limits<std::uint64_t>::max());
+    const auto errno_address = invoke_guest_sysv_call(error->address, {});
+    NYXORA_CHECK(*reinterpret_cast<const std::int32_t*>(errno_address) ==
+                 nyxora::runtime::KernelServices::kPosixEnomem);
+    NYXORA_CHECK(memory->view(fixed, 1)[0] == marker_byte[0]);
+
+    const std::array<std::uint64_t, 6> gpu_args{
+        0, guest_page, 0x10, 0x1002, std::numeric_limits<std::uint64_t>::max(), 0};
+    NYXORA_CHECK(invoke_guest_sysv_call(mmap->address, gpu_args) ==
+                 std::numeric_limits<std::uint64_t>::max());
+    NYXORA_CHECK(*reinterpret_cast<const std::int32_t*>(errno_address) ==
+                 nyxora::runtime::KernelServices::kPosixEnotsup);
+
+    const std::array<std::uint64_t, 6> system_args{
+        0, guest_page, 2, 0x3002, std::numeric_limits<std::uint64_t>::max(), 0};
+    NYXORA_CHECK(invoke_guest_sysv_call(mmap->address, system_args) ==
+                 std::numeric_limits<std::uint64_t>::max());
+    NYXORA_CHECK(*reinterpret_cast<const std::int32_t*>(errno_address) ==
+                 nyxora::runtime::KernelServices::kPosixEnotsup);
+
+    constexpr nyxora::GuestAddress result_slot_offset = 0x100;
+    const auto result_slot = aligned_base + result_slot_offset;
+    const auto kernel_fixed = aligned_base + guest_page * 6;
+    const std::array<std::uint64_t, 7> kernel_args{
+        kernel_fixed, guest_page, 2, 0x1012, std::numeric_limits<std::uint64_t>::max(), 0,
+        result_slot};
+    NYXORA_CHECK(invoke_guest_sysv_call(kernel_mmap->address, kernel_args) == 0);
+    std::uint64_t kernel_result = 0;
+    const auto result_bytes = memory->view(result_slot, sizeof(kernel_result));
+    std::memcpy(&kernel_result, result_bytes.data(), sizeof(kernel_result));
+    NYXORA_CHECK(kernel_result == kernel_fixed);
+    NYXORA_CHECK(memory->find(kernel_fixed) != nullptr);
+#endif
+}
+
+NYXORA_TEST(libkernel_private_file_mmap_is_read_only_and_zero_fills_partial_page) {
+#if defined(__x86_64__) || defined(_M_X64)
+    const auto unique = std::to_string(reinterpret_cast<std::uintptr_t>(
+        &libkernel_private_file_mmap_is_read_only_and_zero_fills_partial_page));
+    const auto root = std::filesystem::temp_directory_path() / ("nyxora-mmap-" + unique);
+    std::filesystem::create_directories(root);
+    struct Cleanup {
+        std::filesystem::path root;
+        ~Cleanup() {
+            std::error_code error;
+            std::filesystem::remove_all(root, error);
+        }
+    } cleanup{root};
+    {
+        std::ofstream output(root / "mapped.bin", std::ios::binary);
+        output << "mapped-data";
+    }
+
+    nyxora::memory::GuestAddressSpace memory;
+    constexpr nyxora::GuestAddress path = 0x180000;
+    NYXORA_CHECK(memory.map(path, 0x1000,
+                            nyxora::memory::Protection::read |
+                                nyxora::memory::Protection::write,
+                            "mmap-path"));
+    constexpr char guest_path[] = "/app0/mapped.bin";
+    NYXORA_CHECK(memory.write(
+        path, std::span<const std::byte>(reinterpret_cast<const std::byte*>(guest_path),
+                                         sizeof(guest_path))));
+    nyxora::runtime::KernelServices services(memory);
+    NYXORA_CHECK(services.set_guest_root(root));
+    nyxora::runtime::TlsRegistry tls;
+    nyxora::runtime::GuestThreadManager manager(tls, &services);
+    nyxora::runtime::SymbolRegistry symbols;
+    nyxora::runtime::HleRegistry hle(symbols);
+    nyxora::hle::libkernel::register_core(hle);
+    const auto open = symbols.resolve(libkernel_key("wuCroIGjt2g"));
+    const auto read = symbols.resolve(libkernel_key("AqBioC2vF3I"));
+    const auto mmap = symbols.resolve(libkernel_key("BPE9s9vQQXo"));
+    const auto munmap = symbols.resolve(libkernel_key("UqDGjXA5yUM"));
+    const auto error = symbols.resolve(libkernel_key("9BcDykPmo1I"));
+    NYXORA_CHECK(open.has_value());
+    NYXORA_CHECK(read.has_value());
+    NYXORA_CHECK(mmap.has_value());
+    NYXORA_CHECK(munmap.has_value());
+    NYXORA_CHECK(error.has_value());
+
+    auto stack = nyxora::runtime::GuestStack::create(64 * 1024);
+    auto trampoline = nyxora::runtime::EntryTrampoline::create();
+    NYXORA_CHECK(stack.has_value());
+    NYXORA_CHECK(trampoline.has_value());
+    nyxora::runtime::ScopedGuestThreadManager scope(manager);
+    const auto fd = trampoline->invoke(open->address, stack->top(), path, 0, 0);
+    NYXORA_CHECK(fd >= 3);
+    constexpr nyxora::GuestAddress io_buffer = path + 0x100;
+    NYXORA_CHECK(trampoline->invoke(read->address, stack->top(), fd, io_buffer, 1) == 1);
+    NYXORA_CHECK(memory.view(io_buffer, 1)[0] == std::byte{0x6d});
+
+    const std::array<std::uint64_t, 6> private_args{0, 11, 7, 0x2, fd, 0};
+    const auto mapped = invoke_guest_sysv_call(mmap->address, private_args);
+    NYXORA_CHECK(mapped != std::numeric_limits<std::uint64_t>::max());
+    const auto* region = memory.find(mapped);
+    NYXORA_CHECK(region != nullptr);
+    NYXORA_CHECK(region->size == 16 * 1024);
+    NYXORA_CHECK(region->protection == nyxora::memory::Protection::read);
+    const auto mapped_bytes = memory.view(mapped, 11);
+    NYXORA_CHECK(std::string(reinterpret_cast<const char*>(mapped_bytes.data()), mapped_bytes.size()) ==
+                 "mapped-data");
+    NYXORA_CHECK(memory.view(mapped + 11, 1)[0] == std::byte{0});
+    const std::array<std::byte, 1> value{std::byte{0x44}};
+    NYXORA_CHECK(!memory.write(mapped, value));
+    NYXORA_CHECK(trampoline->invoke(read->address, stack->top(), fd, io_buffer, 1) == 1);
+    NYXORA_CHECK(memory.view(io_buffer, 1)[0] == std::byte{0x61});
+
+    constexpr nyxora::GuestAddress fixed = 0x1c0000;
+    NYXORA_CHECK(memory.map(fixed, 16 * 1024,
+                            nyxora::memory::Protection::read |
+                                nyxora::memory::Protection::write,
+                            "fixed-sentinel"));
+    const std::array<std::byte, 1> sentinel{std::byte{0x6d}};
+    NYXORA_CHECK(memory.write(fixed, sentinel));
+    const std::array<std::uint64_t, 6> invalid_fixed_file{fixed, 12, 1, 0x12, fd, 0};
+    NYXORA_CHECK(invoke_guest_sysv_call(mmap->address, invalid_fixed_file) ==
+                 std::numeric_limits<std::uint64_t>::max());
+    auto errno_address = invoke_guest_sysv_call(error->address, {});
+    NYXORA_CHECK(*reinterpret_cast<const std::int32_t*>(errno_address) ==
+                 nyxora::runtime::KernelServices::kPosixEnotsup);
+    NYXORA_CHECK(memory.find(fixed) != nullptr);
+    NYXORA_CHECK(memory.view(fixed, 1)[0] == sentinel[0]);
+
+    const std::array<std::uint64_t, 6> shared_args{0, 11, 1, 0x1, fd, 0};
+    NYXORA_CHECK(invoke_guest_sysv_call(mmap->address, shared_args) ==
+                 std::numeric_limits<std::uint64_t>::max());
+    errno_address = invoke_guest_sysv_call(error->address, {});
+    NYXORA_CHECK(*reinterpret_cast<const std::int32_t*>(errno_address) ==
+                 nyxora::runtime::KernelServices::kPosixEnotsup);
+    const std::array<std::uint64_t, 2> unmap_args{mapped, 11};
+    NYXORA_CHECK(invoke_guest_sysv_call(munmap->address, unmap_args) == 0);
+    NYXORA_CHECK(memory.find(mapped) == nullptr);
+#endif
+}
 
 NYXORA_TEST(libkernel_file_seek_stat_and_fstat_preserve_guest_abi_and_errno) {
 #if defined(__x86_64__) || defined(_M_X64)

@@ -26,7 +26,7 @@ std::uint64_t posix_result(int error) {
     return error == 0 ? 0 : posix_failure(error);
 }
 
-std::uint64_t posix_file_result(std::int64_t result) {
+std::uint64_t posix_kernel_result(std::int64_t result) {
     if (result >= 0) {
         return static_cast<std::uint64_t>(result);
     }
@@ -94,6 +94,61 @@ std::uint64_t kernel_mprotect(std::uint64_t address, std::uint64_t size,
                                             static_cast<std::uint32_t>(protection)));
 }
 
+std::uint64_t posix_mprotect(std::uint64_t address, std::uint64_t size,
+                               std::uint64_t protection) {
+    auto* services = kernel_services();
+    if (services == nullptr) {
+        return posix_failure(runtime::KernelServices::kPosixEinval);
+    }
+    return posix_kernel_result(services->mprotect(static_cast<GuestAddress>(address),
+                                                  static_cast<GuestSize>(size),
+                                                  static_cast<std::uint32_t>(protection)));
+}
+
+std::uint64_t posix_mmap(std::uint64_t address, std::uint64_t size, std::uint64_t protection,
+                         std::uint64_t flags, std::uint64_t fd, std::uint64_t offset) {
+    auto* services = kernel_services();
+    if (services == nullptr) {
+        return posix_failure(runtime::KernelServices::kPosixEinval);
+    }
+    return posix_kernel_result(services->map_memory(
+        static_cast<GuestAddress>(address), static_cast<GuestSize>(size),
+        static_cast<std::uint32_t>(protection), static_cast<std::uint32_t>(flags),
+        static_cast<int>(static_cast<std::int32_t>(fd)), static_cast<std::int64_t>(offset)));
+}
+
+std::uint64_t kernel_mmap(std::uint64_t address, std::uint64_t size, std::uint64_t protection,
+                          std::uint64_t flags, std::uint64_t fd, std::uint64_t offset,
+                          std::uint64_t result_address) {
+    auto* services = kernel_services();
+    if (services == nullptr) {
+        return kernel_error_result(runtime::KernelServices::kErrorEinval);
+    }
+    return signed_result(services->map_memory_to(
+        static_cast<GuestAddress>(address), static_cast<GuestSize>(size),
+        static_cast<std::uint32_t>(protection), static_cast<std::uint32_t>(flags),
+        static_cast<int>(static_cast<std::int32_t>(fd)), static_cast<std::int64_t>(offset),
+        static_cast<GuestAddress>(result_address)));
+}
+
+std::uint64_t posix_munmap(std::uint64_t address, std::uint64_t size) {
+    auto* services = kernel_services();
+    if (services == nullptr) {
+        return posix_failure(runtime::KernelServices::kPosixEinval);
+    }
+    return posix_kernel_result(services->unmap_memory(static_cast<GuestAddress>(address),
+                                                      static_cast<GuestSize>(size)));
+}
+
+std::uint64_t kernel_munmap(std::uint64_t address, std::uint64_t size) {
+    auto* services = kernel_services();
+    if (services == nullptr) {
+        return kernel_error_result(runtime::KernelServices::kErrorEinval);
+    }
+    return signed_result(services->unmap_memory(static_cast<GuestAddress>(address),
+                                                static_cast<GuestSize>(size)));
+}
+
 std::uint64_t kernel_open(std::uint64_t path, std::uint64_t flags, std::uint64_t mode) {
     auto* services = kernel_services();
     if (services == nullptr) {
@@ -127,7 +182,7 @@ std::uint64_t posix_open(std::uint64_t path, std::uint64_t flags, std::uint64_t 
     if (services == nullptr) {
         return posix_failure(runtime::KernelServices::kPosixEinval);
     }
-    return posix_file_result(services->open_readonly(static_cast<GuestAddress>(path),
+    return posix_kernel_result(services->open_readonly(static_cast<GuestAddress>(path),
                                                      static_cast<std::uint32_t>(flags),
                                                      static_cast<std::uint16_t>(mode)));
 }
@@ -137,7 +192,7 @@ std::uint64_t posix_read(std::uint64_t fd, std::uint64_t buffer, std::uint64_t s
     if (services == nullptr) {
         return posix_failure(runtime::KernelServices::kPosixEbadf);
     }
-    return posix_file_result(services->read(static_cast<int>(static_cast<std::int32_t>(fd)),
+    return posix_kernel_result(services->read(static_cast<int>(static_cast<std::int32_t>(fd)),
                                             static_cast<GuestAddress>(buffer),
                                             static_cast<GuestSize>(size)));
 }
@@ -147,7 +202,7 @@ std::uint64_t posix_close(std::uint64_t fd) {
     if (services == nullptr) {
         return posix_failure(runtime::KernelServices::kPosixEbadf);
     }
-    return posix_file_result(services->close(static_cast<int>(static_cast<std::int32_t>(fd))));
+    return posix_kernel_result(services->close(static_cast<int>(static_cast<std::int32_t>(fd))));
 }
 
 std::uint64_t posix_lseek(std::uint64_t fd, std::uint64_t offset, std::uint64_t whence) {
@@ -155,7 +210,7 @@ std::uint64_t posix_lseek(std::uint64_t fd, std::uint64_t offset, std::uint64_t 
     if (services == nullptr) {
         return posix_failure(runtime::KernelServices::kPosixEbadf);
     }
-    return posix_file_result(services->seek(static_cast<int>(static_cast<std::int32_t>(fd)),
+    return posix_kernel_result(services->seek(static_cast<int>(static_cast<std::int32_t>(fd)),
                                             static_cast<std::int64_t>(offset),
                                             static_cast<int>(static_cast<std::int32_t>(whence))));
 }
@@ -175,7 +230,7 @@ std::uint64_t posix_stat(std::uint64_t path, std::uint64_t stat) {
     if (services == nullptr) {
         return posix_failure(runtime::KernelServices::kPosixEinval);
     }
-    return posix_file_result(services->stat_path(static_cast<GuestAddress>(path),
+    return posix_kernel_result(services->stat_path(static_cast<GuestAddress>(path),
                                                  static_cast<GuestAddress>(stat)));
 }
 
@@ -193,7 +248,7 @@ std::uint64_t posix_fstat(std::uint64_t fd, std::uint64_t stat) {
     if (services == nullptr) {
         return posix_failure(runtime::KernelServices::kPosixEbadf);
     }
-    return posix_file_result(services->fstat(static_cast<int>(static_cast<std::int32_t>(fd)),
+    return posix_kernel_result(services->fstat(static_cast<int>(static_cast<std::int32_t>(fd)),
                                              static_cast<GuestAddress>(stat)));
 }
 
@@ -833,6 +888,22 @@ void register_core(runtime::HleRegistry& registry) {
     (void)registry.register_function(key("vSMAm3cxYTY"),
                                      reinterpret_cast<GuestAddress>(&kernel_mprotect),
                                      "sceKernelMprotect");
+    const auto posix_mprotect_address = reinterpret_cast<GuestAddress>(&posix_mprotect);
+    const auto posix_mmap_address = reinterpret_cast<GuestAddress>(&posix_mmap);
+    const auto posix_munmap_address = reinterpret_cast<GuestAddress>(&posix_munmap);
+    for (const char* library : {"libkernel", "libScePosix"}) {
+        (void)registry.register_function(key("YQOfxL4QfeU", library), posix_mprotect_address,
+                                         "mprotect");
+        (void)registry.register_function(key("BPE9s9vQQXo", library), posix_mmap_address, "mmap");
+        (void)registry.register_function(key("UqDGjXA5yUM", library), posix_munmap_address,
+                                         "munmap");
+    }
+    (void)registry.register_function(key("PGhQHd-dzv8"),
+                                     reinterpret_cast<GuestAddress>(&kernel_mmap),
+                                     "sceKernelMmap");
+    (void)registry.register_function(key("cQke9UuBQOk"),
+                                     reinterpret_cast<GuestAddress>(&kernel_munmap),
+                                     "sceKernelMunmap");
     (void)registry.register_function(key("1G3lF1Gg1k8"),
                                      reinterpret_cast<GuestAddress>(&kernel_open),
                                      "sceKernelOpen");

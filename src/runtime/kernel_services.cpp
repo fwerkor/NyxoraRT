@@ -20,6 +20,22 @@ namespace nyxora::runtime {
 namespace {
 
 constexpr GuestSize kGuestPageSize = 16 * 1024;
+constexpr GuestAddress kDefaultMappingBase = 0x2'0000'0000ULL;
+constexpr std::uint32_t kMapShared = 0x0001;
+constexpr std::uint32_t kMapPrivate = 0x0002;
+constexpr std::uint32_t kMapFixed = 0x0010;
+constexpr std::uint32_t kMapNoOverwrite = 0x0080;
+constexpr std::uint32_t kMapVoid = 0x0100;
+constexpr std::uint32_t kMapStack = 0x0400;
+constexpr std::uint32_t kMapNoSync = 0x0800;
+constexpr std::uint32_t kMapAnon = 0x1000;
+constexpr std::uint32_t kMapSystem = 0x2000;
+constexpr std::uint32_t kMapNoCore = 0x20000;
+constexpr std::uint32_t kMapNoCoalesce = 0x400000;
+constexpr std::uint32_t kKnownMapFlags =
+    kMapShared | kMapPrivate | kMapFixed | kMapNoOverwrite | kMapVoid | kMapStack |
+    kMapNoSync | kMapAnon | kMapSystem | kMapNoCore | kMapNoCoalesce;
+constexpr std::uint32_t kKnownProtectionBits = 0x37U;
 constexpr std::size_t kMaxGuestPath = 1024;
 constexpr std::uint32_t kOpenWriteOnly = 0x0001;
 constexpr std::uint32_t kOpenReadWrite = 0x0002;
@@ -206,6 +222,86 @@ bool file_modification_time(const std::filesystem::path& path, std::int64_t& sec
 #endif
 }
 
+std::optional<memory::Protection> cpu_protection(std::uint32_t protection) {
+    if ((protection & ~kKnownProtectionBits) != 0) {
+        return std::nullopt;
+    }
+    memory::Protection host = memory::Protection::none;
+    if ((protection & 0x01U) != 0) {
+        host = host | memory::Protection::read;
+    }
+    if ((protection & 0x02U) != 0) {
+        host = host | memory::Protection::read | memory::Protection::write;
+    }
+    if ((protection & 0x04U) != 0) {
+        host = host | memory::Protection::execute;
+    }
+    return host;
+}
+
+bool ranges_overlap(GuestAddress left_base, GuestSize left_size, const memory::RegionInfo& right) {
+    if (left_size == 0 || right.size == 0 ||
+        left_base > std::numeric_limits<GuestAddress>::max() - left_size ||
+        right.base > std::numeric_limits<GuestAddress>::max() - right.size) {
+        return false;
+    }
+    return left_base < right.base + right.size && right.base < left_base + left_size;
+}
+
+bool range_inside_native(const memory::GuestAddressSpace& memory, GuestAddress base, GuestSize size) {
+    if (!memory.native_backed()) {
+        return base <= std::numeric_limits<GuestAddress>::max() - size;
+    }
+    const auto native_base = memory.native_base();
+    if (native_base > std::numeric_limits<GuestAddress>::max() - memory.native_size()) {
+        return false;
+    }
+    const auto native_end = native_base + memory.native_size();
+    return base >= native_base && base <= native_end && size <= native_end - base;
+}
+
+std::optional<GuestAddress> find_free_mapping(const memory::GuestAddressSpace& memory,
+                                              GuestAddress requested, GuestSize size) {
+    GuestAddress candidate = requested;
+    if (memory.native_backed()) {
+        const auto aligned_native = checked_align_up(memory.native_base(), kGuestPageSize);
+        if (!aligned_native) {
+            return std::nullopt;
+        }
+        candidate = std::max(candidate, *aligned_native);
+    }
+    if (candidate == 0) {
+        candidate = kDefaultMappingBase;
+    }
+    if (candidate % kGuestPageSize != 0) {
+        const auto aligned = checked_align_up(candidate, kGuestPageSize);
+        if (!aligned) {
+            return std::nullopt;
+        }
+        candidate = *aligned;
+    }
+
+    for (const auto& region : memory.regions()) {
+        if (region.base > std::numeric_limits<GuestAddress>::max() - region.size) {
+            return std::nullopt;
+        }
+        const auto region_end = region.base + region.size;
+        if (region_end <= candidate) {
+            continue;
+        }
+        if (candidate <= region.base && size <= region.base - candidate) {
+            return range_inside_native(memory, candidate, size) ? std::optional{candidate}
+                                                                 : std::nullopt;
+        }
+        const auto aligned = checked_align_up(region_end, kGuestPageSize);
+        if (!aligned) {
+            return std::nullopt;
+        }
+        candidate = *aligned;
+    }
+    return range_inside_native(memory, candidate, size) ? std::optional{candidate} : std::nullopt;
+}
+
 bool path_is_within(const std::filesystem::path& root, const std::filesystem::path& path) {
     auto root_it = root.begin();
     auto path_it = path.begin();
@@ -241,8 +337,8 @@ std::uint64_t KernelServices::direct_memory_size() const noexcept {
 
 std::int64_t KernelServices::mprotect(GuestAddress address, GuestSize size,
                                       std::uint32_t protection) {
-    constexpr std::uint32_t known_bits = 0x37U;
-    if ((protection & ~known_bits) != 0) {
+    const auto host_protection = cpu_protection(protection);
+    if (!host_protection) {
         return error(kErrorEinval);
     }
     if (size == 0) {
@@ -259,18 +355,228 @@ std::int64_t KernelServices::mprotect(GuestAddress address, GuestSize size,
         return error(kErrorEinval);
     }
 
-    memory::Protection host = memory::Protection::none;
-    if ((protection & 0x01U) != 0) {
-        host = host | memory::Protection::read;
+    try {
+        return memory_.protect_range(aligned_address, *aligned_size, *host_protection)
+                   ? 0
+                   : error(kErrorEnomem);
+    } catch (const std::bad_alloc&) {
+        return error(kErrorEnomem);
     }
-    if ((protection & 0x02U) != 0) {
-        host = host | memory::Protection::read | memory::Protection::write;
+}
+
+std::int64_t KernelServices::map_memory(GuestAddress address, GuestSize size,
+                                        std::uint32_t protection, std::uint32_t flags, int fd,
+                                        std::int64_t offset) {
+    if (size == 0 || (flags & ~kKnownMapFlags) != 0) {
+        return error(kErrorEinval);
     }
-    if ((protection & 0x04U) != 0) {
-        host = host | memory::Protection::execute;
+    const auto host_protection = cpu_protection(protection);
+    if (!host_protection) {
+        return error(kErrorEinval);
+    }
+    if ((protection & 0x30U) != 0) {
+        return error(kErrorEnotsup);
+    }
+    const auto aligned_size = checked_align_up(size, kGuestPageSize);
+    if (!aligned_size) {
+        return error(kErrorEinval);
+    }
+
+    GuestAddress aligned_address = address;
+    if (address != 0) {
+        const auto aligned = checked_align_up(address, kGuestPageSize);
+        if (!aligned) {
+            return error(kErrorEinval);
+        }
+        aligned_address = *aligned;
+    }
+    const bool fixed = (flags & kMapFixed) != 0;
+    if (fixed && address != aligned_address) {
+        return error(kErrorEinval);
+    }
+
+    const bool anonymous = (flags & kMapAnon) != 0;
+    const bool stack = !anonymous && (flags & kMapStack) != 0;
+    const bool reserved = !anonymous && !stack && (flags & kMapVoid) != 0;
+    if (anonymous && (flags & kMapSystem) != 0) {
+        return error(kErrorEnotsup);
+    }
+    const bool file_mapping = !anonymous && !stack && !reserved;
+    if (file_mapping && ((flags & kMapShared) != 0 || (flags & kMapPrivate) == 0)) {
+        return error(kErrorEnotsup);
+    }
+    if (file_mapping && (offset < 0 || static_cast<std::uint64_t>(offset) % kGuestPageSize != 0)) {
+        return error(kErrorEinval);
+    }
+
+    memory::Protection final_protection = *host_protection;
+    std::shared_ptr<FileRecord> record;
+    std::vector<std::byte> file_snapshot;
+    if (file_mapping) {
+        {
+            std::scoped_lock lock(files_mutex_);
+            const auto it = files_.find(fd);
+            if (it == files_.end()) {
+                return error(kErrorEbadf);
+            }
+            record = it->second;
+        }
+        std::scoped_lock file_lock(record->mutex);
+        const auto saved_state = record->file.rdstate();
+        auto restore_file_position = [&] {
+            record->file.clear();
+            record->file.seekg(static_cast<std::streamoff>(record->position), std::ios::beg);
+            const bool restored = static_cast<bool>(record->file);
+            record->file.clear(saved_state);
+            return restored;
+        };
+
+        record->file.clear();
+        record->file.seekg(0, std::ios::end);
+        const auto end_position = record->file.tellg();
+        bool snapshot_ok = end_position != std::streampos{-1};
+        std::uint64_t file_size = 0;
+        if (snapshot_ok) {
+            const auto stream_size = static_cast<std::streamoff>(end_position);
+            snapshot_ok = stream_size >= 0;
+            if (snapshot_ok) {
+                file_size = static_cast<std::uint64_t>(stream_size);
+            }
+        }
+        const auto file_offset = static_cast<std::uint64_t>(offset);
+        snapshot_ok = snapshot_ok && file_offset <= file_size && size <= file_size - file_offset;
+        if (!snapshot_ok) {
+            return restore_file_position() ? error(kErrorEnotsup) : error(kErrorEbadf);
+        }
+        if (size > static_cast<GuestSize>(std::numeric_limits<std::size_t>::max())) {
+            return restore_file_position() ? error(kErrorEnomem) : error(kErrorEbadf);
+        }
+        try {
+            file_snapshot.resize(static_cast<std::size_t>(size));
+        } catch (const std::bad_alloc&) {
+            return restore_file_position() ? error(kErrorEnomem) : error(kErrorEbadf);
+        }
+
+        record->file.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+        snapshot_ok = static_cast<bool>(record->file);
+        std::size_t copied = 0;
+        constexpr std::size_t snapshot_chunk_size = 64 * 1024;
+        while (snapshot_ok && copied < file_snapshot.size()) {
+            const auto request = std::min(snapshot_chunk_size, file_snapshot.size() - copied);
+            record->file.read(reinterpret_cast<char*>(file_snapshot.data() + copied),
+                              static_cast<std::streamsize>(request));
+            if (record->file.gcount() != static_cast<std::streamsize>(request)) {
+                snapshot_ok = false;
+                break;
+            }
+            copied += request;
+        }
+        const bool restored = restore_file_position();
+        if (!restored) {
+            return error(kErrorEbadf);
+        }
+        if (!snapshot_ok) {
+            return error(kErrorEnotsup);
+        }
+        final_protection = (protection & 0x03U) != 0 ? memory::Protection::read
+                                                     : memory::Protection::none;
+    }
+
+    std::string mapping_name;
+    try {
+        mapping_name = reserved ? "mmap-reserved"
+                       : stack ? "mmap-stack"
+                       : file_mapping ? "mmap-file"
+                                      : "mmap-anon";
+    } catch (const std::bad_alloc&) {
+        return error(kErrorEnomem);
+    }
+
+    GuestAddress mapped_address{};
+    if (fixed) {
+        if (!range_inside_native(memory_, aligned_address, *aligned_size)) {
+            return error(kErrorEnomem);
+        }
+        if ((flags & kMapNoOverwrite) != 0) {
+            for (const auto& region : memory_.regions()) {
+                if (ranges_overlap(aligned_address, *aligned_size, region)) {
+                    return error(kErrorEnomem);
+                }
+            }
+        } else if (!memory_.unmap_range(aligned_address, *aligned_size)) {
+            return error(kErrorEnomem);
+        }
+        mapped_address = aligned_address;
+    } else {
+        const auto free = find_free_mapping(memory_, aligned_address, *aligned_size);
+        if (!free) {
+            return error(kErrorEnomem);
+        }
+        mapped_address = *free;
+    }
+
+    const auto staging = memory::Protection::read | memory::Protection::write;
+    try {
+        if (!memory_.map(mapped_address, *aligned_size, reserved ? memory::Protection::none : staging,
+                         std::move(mapping_name))) {
+            return error(kErrorEnomem);
+        }
+        if (reserved) {
+            return static_cast<std::int64_t>(mapped_address);
+        }
+        if (!memory_.zero(mapped_address, *aligned_size)) {
+            (void)memory_.unmap_range(mapped_address, *aligned_size);
+            return error(kErrorEnomem);
+        }
+
+        if (file_mapping && !file_snapshot.empty() &&
+            !memory_.write(mapped_address, file_snapshot)) {
+            (void)memory_.unmap_range(mapped_address, *aligned_size);
+            return error(kErrorEnomem);
+        }
+
+        if (final_protection != staging &&
+            !memory_.protect(mapped_address, *aligned_size, final_protection)) {
+            (void)memory_.unmap_range(mapped_address, *aligned_size);
+            return error(kErrorEnomem);
+        }
+        return static_cast<std::int64_t>(mapped_address);
+    } catch (const std::bad_alloc&) {
+        if (memory_.find(mapped_address) != nullptr) {
+            (void)memory_.unmap_range(mapped_address, *aligned_size);
+        }
+        return error(kErrorEnomem);
+    }
+}
+
+std::int64_t KernelServices::map_memory_to(GuestAddress address, GuestSize size,
+                                           std::uint32_t protection, std::uint32_t flags, int fd,
+                                           std::int64_t offset, GuestAddress output_address) {
+    if (!guest_writable(output_address, sizeof(std::uint64_t))) {
+        return error(kErrorEfault);
+    }
+    const auto mapped = map_memory(address, size, protection, flags, fd, offset);
+    if (mapped < 0) {
+        return mapped;
+    }
+    if (!write_guest_u64(output_address, static_cast<std::uint64_t>(mapped))) {
+        (void)unmap_memory(static_cast<GuestAddress>(mapped), size);
+        return error(kErrorEfault);
+    }
+    return 0;
+}
+
+std::int64_t KernelServices::unmap_memory(GuestAddress address, GuestSize size) {
+    if (size == 0) {
+        return error(kErrorEinval);
+    }
+    const auto aligned_address = address / kGuestPageSize * kGuestPageSize;
+    const auto aligned_size = checked_align_up(size, kGuestPageSize);
+    if (!aligned_size || !range_inside_native(memory_, aligned_address, *aligned_size)) {
+        return error(kErrorEinval);
     }
     try {
-        return memory_.protect_range(aligned_address, *aligned_size, host) ? 0 : error(kErrorEnomem);
+        return memory_.unmap_range(aligned_address, *aligned_size) ? 0 : error(kErrorEinval);
     } catch (const std::bad_alloc&) {
         return error(kErrorEnomem);
     }
@@ -480,6 +786,11 @@ std::int64_t KernelServices::read(int fd, GuestAddress buffer, GuestSize size) {
             return total == 0 ? error(kErrorEfault) : static_cast<std::int64_t>(total);
         }
         total += bytes_read;
+        if (bytes_read > static_cast<std::uint64_t>(
+                             std::numeric_limits<std::int64_t>::max() - record->position)) {
+            return total == 0 ? error(kErrorEbadf) : static_cast<std::int64_t>(total);
+        }
+        record->position += static_cast<std::int64_t>(bytes_read);
         if (record->file.bad()) {
             return total == 0 ? error(kErrorEbadf) : static_cast<std::int64_t>(total);
         }
@@ -539,7 +850,8 @@ std::int64_t KernelServices::seek(int fd, std::int64_t offset, int whence) {
     if (stream_offset < 0) {
         return error(kErrorEinval);
     }
-    return static_cast<std::int64_t>(stream_offset);
+    record->position = static_cast<std::int64_t>(stream_offset);
+    return record->position;
 }
 
 std::int64_t KernelServices::write_file_stat(const std::filesystem::path& path,
