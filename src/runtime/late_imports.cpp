@@ -160,11 +160,6 @@ const std::uint64_t* LateImportTable::target_slot(std::size_t index) const noexc
     return reinterpret_cast<const std::uint64_t*>(arena_.base() + data_offset_ + index * kDataSlotSize);
 }
 
-std::uint64_t* LateImportTable::counter_slot(std::size_t index) noexcept {
-    auto* target = target_slot(index);
-    return target == nullptr ? nullptr : target + 1;
-}
-
 const std::uint64_t* LateImportTable::counter_slot(std::size_t index) const noexcept {
     const auto* target = target_slot(index);
     return target == nullptr ? nullptr : target + 1;

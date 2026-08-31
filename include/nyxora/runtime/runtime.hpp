@@ -33,7 +33,20 @@ struct LoadedModule {
     std::optional<loader::DynamicInfo> dynamic;
     std::optional<loader::TlsSegment> tls;
     std::uint32_t tls_module_id{};
+    GuestAddress process_param{};
+    GuestSize process_param_size{};
     RelocationReport relocations;
+};
+
+struct LoadedProgram {
+    std::vector<LoadedModule> modules;
+    std::vector<std::vector<std::size_t>> dependencies;
+    std::size_t main_module{};
+    std::vector<std::size_t> initialized_modules;
+    bool preinitialized{};
+    bool initialization_failed{};
+    bool finalized{};
+    bool finalization_failed{};
 };
 
 class Runtime {
@@ -42,9 +55,12 @@ public:
     Runtime(std::unique_ptr<gpu::Backend> gpu_backend, memory::GuestAddressSpace memory);
 
     LoadedModule load_elf(const std::filesystem::path& path, GuestAddress base = 0);
+    LoadedProgram load_program(const std::filesystem::path& path, GuestAddress base = 0);
     LoadedModule load_image(const loader::Elf64Image& image, std::filesystem::path path,
                             GuestAddress base = 0);
     RelocationReport relink(LoadedModule& module);
+    void initialize_program(LoadedProgram& program, GuestSize stack_size = 1024 * 1024);
+    void finalize_program(LoadedProgram& program, GuestSize stack_size = 1024 * 1024);
     [[nodiscard]] std::uint64_t invoke_entry(const LoadedModule& module,
                                              GuestSize stack_size = 1024 * 1024,
                                              std::uint64_t arg0 = 0,
@@ -82,6 +98,11 @@ public:
     }
 
 private:
+    LoadedModule map_image(const loader::Elf64Image& image, std::filesystem::path path,
+                           GuestAddress base);
+    void link_module(LoadedModule& module);
+    [[nodiscard]] GuestAddress find_module_base(const loader::Elf64Image& image) const;
+
     memory::GuestAddressSpace memory_;
     SymbolRegistry symbols_;
     TlsRegistry tls_registry_;

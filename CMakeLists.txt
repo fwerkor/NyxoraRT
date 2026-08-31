@@ -89,6 +89,7 @@ if(NYXORA_BUILD_TESTS)
         tests/guest_thread_tests.cpp
         tests/thread_manager_tests.cpp
         tests/runtime_tests.cpp
+        tests/module_lifecycle_tests.cpp
         tests/guest_address_space_tests.cpp
         tests/native_arena_tests.cpp
         tests/native_thread_tests.cpp

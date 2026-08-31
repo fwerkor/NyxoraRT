@@ -49,7 +49,6 @@ private:
     [[nodiscard]] GuestAddress thunk_address(std::size_t index) const noexcept;
     [[nodiscard]] std::uint64_t* target_slot(std::size_t index) noexcept;
     [[nodiscard]] const std::uint64_t* target_slot(std::size_t index) const noexcept;
-    [[nodiscard]] std::uint64_t* counter_slot(std::size_t index) noexcept;
     [[nodiscard]] const std::uint64_t* counter_slot(std::size_t index) const noexcept;
 
     memory::NativeArena arena_;

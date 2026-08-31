@@ -1421,4 +1421,8 @@ void register_core(runtime::HleRegistry& registry) {
                                      "scePthreadCondBroadcast");
 }
 
+bool provides_module(std::string_view filename) noexcept {
+    return filename == "libkernel.prx" || filename == "libScePosix.prx";
+}
+
 } // namespace nyxora::hle::libkernel
