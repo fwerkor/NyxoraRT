@@ -9,7 +9,7 @@ The project is intentionally early. It does **not** currently run commercial con
 - **Native-first CPU path**: preserve guest x86-64 code and build the runtime around ABI thunks rather than an always-on interpreter.
 - **Explicit HLE boundary**: imports are resolved through a version-aware symbol registry that can target HLE functions or guest exports.
 - **Guest address-space model**: the same memory policy can use deterministic buffered storage or an identity-mapped native arena, so linker behavior does not fork between tests and direct execution.
-- **GPU command boundary**: guest command streams enter through a small backend interface. The first real backend is planned around PM4 decoding, an internal state model, shader IR, and Vulkan.
+- **GPU command boundary**: guest command streams pass through one shared PM4 frontend before reaching a host backend. The frontend owns packet validation and architectural state normalization so later Vulkan work does not duplicate guest command parsing.
 - **Per-title compatibility without contaminating the core**: quirks and patches will live above the generic runtime rather than inside low-level primitives.
 
 ## Current milestone
@@ -32,7 +32,7 @@ The initial framework already provides:
 - POSIX guest fault capture for SIGSEGV/SIGBUS/SIGILL and Windows x64 vectored-exception recovery, both returning through the native entry recovery epilogue; the same recovery route provides `pthread_exit` without C++ unwinding or cross-stack `longjmp`;
 - `GuestThread`/`Runtime::start_thread()` plus a runtime-owned thread manager, with `pthread_create`, join/timed-join, `pthread_self`, `pthread_detach`, and `pthread_exit` HLE for `libkernel` and `libScePosix`; timed join uses an absolute realtime deadline without consuming the handle on timeout, stack-size/detach-state attributes are consumed at create time, and detached guest threads remain host-owned until completion/shutdown rather than escaping the runtime;
 - a Windows x64 HLE bridge that remaps up to seven SysV integer/pointer arguments to MS-x64, including guest stack arguments, and switches C++ host calls back to the suspended OS thread stack instead of running substantial host code on the guest stack;
-- a bounds-checked PM4 packet frontend, GPU submission/timeline interface, and deterministic null backend;
+- a bounds-checked PM4 command frontend that transactionally validates submissions, tracks Type0 plus CONFIG/CONTEXT/SH/UCONFIG register state, separates graphics/compute shader banks, normalizes `NUM_INSTANCES`, `DRAW_INDEX_AUTO`, and `DISPATCH_DIRECT` into typed commands, and feeds the same normalized stream to the deterministic null backend;
 - unit tests and CI-ready CMake/CTest targets.
 
 ```bash
@@ -54,8 +54,8 @@ To inspect a legal, unencrypted x86-64 ELF test image:
 3. Extend the file layer with directory traversal and an explicit mount/write policy before enabling any guest file creation or mutation.
 4. Grow Windows CPU-patch capacity beyond the current one-page near arena and cover rarer TCB operand forms.
 5. Add explicit module unload/TLS deregistration, firmware/system module namespaces, and inherited search-path semantics only after their lifetime rules can be enforced without invalidating active guest threads.
-6. PM4 command processor with deterministic tracing and state tracking.
-7. Shader frontend -> typed IR -> SPIR-V backend and persistent shader/pipeline cache, followed by Vulkan resource/synchronization/presentation work.
+6. Extend the PM4 command processor beyond the current register writes/direct draw/direct dispatch subset: predication, indirect buffers/draws/dispatches, events/barriers, memory writes, and context-reset semantics must be modeled before real command traces are accepted broadly.
+7. Add shader discovery from tracked SH state, then build the shader frontend -> typed IR -> SPIR-V backend and persistent shader/pipeline cache, followed by Vulkan resource/synchronization/presentation work.
 
 See [`docs/architecture.md`](docs/architecture.md) and [`docs/research-notes.md`](docs/research-notes.md).
 

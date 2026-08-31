@@ -1,4 +1,5 @@
 #include "test.hpp"
+#include "pm4_fixture.hpp"
 #include "nyxora/gpu/pm4.hpp"
 
 #include <array>
@@ -75,4 +76,212 @@ NYXORA_TEST(pm4_decoder_rejects_type1_and_next_after_end) {
         at_end = true;
     }
     NYXORA_CHECK(at_end);
+}
+
+
+NYXORA_TEST(pm4_processor_tracks_register_spaces_and_shader_banks) {
+    using namespace nyxora::gpu::pm4;
+    const std::array<std::uint32_t, 13> stream{
+        nyxora::test::pm4_packet3(Type3Opcode::set_config_reg, 3), 0x10, 0x1111, 0x2222,
+        nyxora::test::pm4_packet3(Type3Opcode::set_context_reg, 2), 0x20, 0x3333,
+        nyxora::test::pm4_packet3(Type3Opcode::set_sh_reg, 2), 0x30, 0x4444,
+        nyxora::test::pm4_packet3(Type3Opcode::set_sh_reg, 2, 0x2), 0x31, 0x5555,
+    };
+
+    Processor processor(QueueType::graphics);
+    const auto submission = processor.process(stream);
+    NYXORA_CHECK(submission.packets_decoded == 4);
+    NYXORA_CHECK(submission.dwords_consumed == stream.size());
+    NYXORA_CHECK(submission.commands.size() == 5);
+    NYXORA_CHECK(processor.state().register_value(RegisterSpace::config, 0x2010) == 0x1111U);
+    NYXORA_CHECK(processor.state().register_value(RegisterSpace::config, 0x2011) == 0x2222U);
+    NYXORA_CHECK(processor.state().register_value(RegisterSpace::context, 0xa020) == 0x3333U);
+    NYXORA_CHECK(processor.state().register_value(RegisterSpace::shader_graphics, 0x2c30) ==
+                 0x4444U);
+    NYXORA_CHECK(processor.state().register_value(RegisterSpace::shader_compute, 0x2c31) ==
+                 0x5555U);
+}
+
+NYXORA_TEST(pm4_processor_emits_draw_and_dispatch_commands) {
+    using namespace nyxora::gpu::pm4;
+    const std::array<std::uint32_t, 10> stream{
+        nyxora::test::pm4_packet3(Type3Opcode::num_instances, 1), 3,
+        nyxora::test::pm4_packet3(Type3Opcode::draw_index_auto, 2), 36, 0x2,
+        nyxora::test::pm4_packet3(Type3Opcode::dispatch_direct, 4, 0x2), 8, 4, 2, 0x1,
+    };
+
+    Processor processor(QueueType::graphics);
+    const auto submission = processor.process(stream);
+    NYXORA_CHECK(submission.commands.size() == 3);
+    NYXORA_CHECK(processor.state().num_instances() == 3U);
+
+    const auto* instances = std::get_if<SetNumInstances>(&submission.commands[0]);
+    const auto* draw = std::get_if<DrawIndexAuto>(&submission.commands[1]);
+    const auto* dispatch = std::get_if<DispatchDirect>(&submission.commands[2]);
+    NYXORA_CHECK(instances != nullptr && instances->count == 3U);
+    NYXORA_CHECK(draw != nullptr && draw->index_count == 36U && draw->initiator == 0x2U);
+    NYXORA_CHECK(dispatch != nullptr && dispatch->groups_x == 8U && dispatch->groups_y == 4U &&
+                 dispatch->groups_z == 2U && dispatch->initiator == 0x1U);
+}
+
+NYXORA_TEST(pm4_processor_tracks_type0_and_uconfig_writes) {
+    using namespace nyxora::gpu::pm4;
+    constexpr std::uint32_t type0_header = (1U << 16U) | 0x1234U;
+    const std::array<std::uint32_t, 6> stream{
+        type0_header, 0xaaaa, 0xbbbb,
+        nyxora::test::pm4_packet3(Type3Opcode::set_uconfig_reg, 2), 0x3, 0xcccc,
+    };
+
+    Processor processor(QueueType::graphics);
+    (void)processor.process(stream);
+    NYXORA_CHECK(processor.state().register_value(RegisterSpace::type0, 0x1234) == 0xaaaaU);
+    NYXORA_CHECK(processor.state().register_value(RegisterSpace::type0, 0x1235) == 0xbbbbU);
+    NYXORA_CHECK(processor.state().register_value(RegisterSpace::uconfig, 0xc003) == 0xccccU);
+    NYXORA_CHECK(processor.state().register_count(RegisterSpace::type0) == 2U);
+}
+
+NYXORA_TEST(pm4_processor_is_transactional_on_invalid_submission) {
+    using namespace nyxora::gpu::pm4;
+    Processor processor(QueueType::graphics);
+    const std::array<std::uint32_t, 3> initial{
+        nyxora::test::pm4_packet3(Type3Opcode::set_context_reg, 2), 0x1, 0x12345678,
+    };
+    (void)processor.process(initial);
+
+    const std::array<std::uint32_t, 6> invalid{
+        nyxora::test::pm4_packet3(Type3Opcode::set_context_reg, 2), 0x2, 0xdeadbeef,
+        nyxora::test::pm4_packet3(static_cast<Type3Opcode>(0x7b), 2), 0, 0,
+    };
+    bool threw = false;
+    try {
+        (void)processor.process(invalid);
+    } catch (const std::runtime_error&) {
+        threw = true;
+    }
+    NYXORA_CHECK(threw);
+    NYXORA_CHECK(processor.state().register_value(RegisterSpace::context, 0xa001) ==
+                 0x12345678U);
+    NYXORA_CHECK(!processor.state().register_value(RegisterSpace::context, 0xa002).has_value());
+}
+
+NYXORA_TEST(pm4_processor_rejects_unsupported_state_semantics) {
+    using namespace nyxora::gpu::pm4;
+    Processor graphics(QueueType::graphics);
+
+    const std::array<std::uint32_t, 3> predicated_set{
+        nyxora::test::pm4_packet3(Type3Opcode::set_context_reg, 2, 0x1), 0, 1,
+    };
+    bool predicated = false;
+    try {
+        (void)graphics.process(predicated_set);
+    } catch (const std::runtime_error&) {
+        predicated = true;
+    }
+    NYXORA_CHECK(predicated);
+
+    const std::array<std::uint32_t, 3> indexed_set{
+        nyxora::test::pm4_packet3(Type3Opcode::set_sh_reg, 2), 0x10000, 1,
+    };
+    bool indexed = false;
+    try {
+        (void)graphics.process(indexed_set);
+    } catch (const std::runtime_error&) {
+        indexed = true;
+    }
+    NYXORA_CHECK(indexed);
+
+    const std::array<std::uint32_t, 3> overflow_set{
+        nyxora::test::pm4_packet3(Type3Opcode::set_context_reg, 2), 0x3ff, 1,
+    };
+    bool overflow = false;
+    try {
+        (void)graphics.process(overflow_set);
+    } catch (const std::runtime_error&) {
+        overflow = true;
+    }
+    NYXORA_CHECK(!overflow);
+
+    const std::array<std::uint32_t, 4> overflow_two_values{
+        nyxora::test::pm4_packet3(Type3Opcode::set_context_reg, 3), 0x3ff, 1, 2,
+    };
+    try {
+        (void)graphics.process(overflow_two_values);
+    } catch (const std::runtime_error&) {
+        overflow = true;
+    }
+    NYXORA_CHECK(overflow);
+
+    Processor compute(QueueType::compute);
+    const std::array<std::uint32_t, 3> draw{
+        nyxora::test::pm4_packet3(Type3Opcode::draw_index_auto, 2), 3, 0,
+    };
+    bool draw_on_compute = false;
+    try {
+        (void)compute.process(draw);
+    } catch (const std::runtime_error&) {
+        draw_on_compute = true;
+    }
+    NYXORA_CHECK(draw_on_compute);
+}
+
+NYXORA_TEST(pm4_processor_reset_clears_tracked_state) {
+    using namespace nyxora::gpu::pm4;
+    Processor processor(QueueType::graphics);
+    const std::array<std::uint32_t, 5> stream{
+        nyxora::test::pm4_packet3(Type3Opcode::set_config_reg, 2), 1, 2,
+        nyxora::test::pm4_packet3(Type3Opcode::num_instances, 1), 7,
+    };
+    (void)processor.process(stream);
+    processor.reset();
+    NYXORA_CHECK(processor.state().register_count(RegisterSpace::config) == 0U);
+    NYXORA_CHECK(!processor.state().num_instances().has_value());
+}
+
+NYXORA_TEST(pm4_processor_validates_packet_specific_payloads_and_type0_range) {
+    using namespace nyxora::gpu::pm4;
+    Processor graphics(QueueType::graphics);
+
+    const std::array<std::uint32_t, 2> short_draw{
+        nyxora::test::pm4_packet3(Type3Opcode::draw_index_auto, 1), 4,
+    };
+    bool rejected = false;
+    try {
+        (void)graphics.process(short_draw);
+    } catch (const std::runtime_error&) {
+        rejected = true;
+    }
+    NYXORA_CHECK(rejected);
+
+    const std::array<std::uint32_t, 4> short_dispatch{
+        nyxora::test::pm4_packet3(Type3Opcode::dispatch_direct, 3), 1, 1, 1,
+    };
+    rejected = false;
+    try {
+        (void)graphics.process(short_dispatch);
+    } catch (const std::runtime_error&) {
+        rejected = true;
+    }
+    NYXORA_CHECK(rejected);
+
+    constexpr std::uint32_t type0_header = (1U << 16U) | 0xffffU;
+    const std::array<std::uint32_t, 3> overflowing_type0{type0_header, 1, 2};
+    rejected = false;
+    try {
+        (void)graphics.process(overflowing_type0);
+    } catch (const std::runtime_error&) {
+        rejected = true;
+    }
+    NYXORA_CHECK(rejected);
+}
+
+NYXORA_TEST(pm4_compute_queue_routes_sh_registers_to_compute_state) {
+    using namespace nyxora::gpu::pm4;
+    Processor compute(QueueType::compute);
+    const std::array<std::uint32_t, 3> stream{
+        nyxora::test::pm4_packet3(Type3Opcode::set_sh_reg, 2), 0x40, 0x1234,
+    };
+    (void)compute.process(stream);
+    NYXORA_CHECK(compute.state().register_value(RegisterSpace::shader_compute, 0x2c40) ==
+                 0x1234U);
+    NYXORA_CHECK(!compute.state().register_value(RegisterSpace::shader_graphics, 0x2c40));
 }

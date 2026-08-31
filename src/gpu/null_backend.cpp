@@ -1,17 +1,32 @@
 #include "nyxora/gpu/null_backend.hpp"
 
 #include <algorithm>
+#include <variant>
 
 namespace nyxora::gpu {
 
-void NullBackend::submit_graphics(std::span<const std::uint32_t> command_stream) {
-    ++stats_.graphics_submissions;
-    stats_.dwords_consumed += command_stream.size();
+void NullBackend::account(const pm4::Submission& submission) {
+    stats_.dwords_consumed += submission.dwords_consumed;
+    stats_.packets_decoded += submission.packets_decoded;
+    for (const auto& command : submission.commands) {
+        if (std::holds_alternative<pm4::RegisterWrite>(command)) {
+            ++stats_.register_writes;
+        } else if (std::holds_alternative<pm4::DrawIndexAuto>(command)) {
+            ++stats_.draw_calls;
+        } else if (std::holds_alternative<pm4::DispatchDirect>(command)) {
+            ++stats_.dispatch_calls;
+        }
+    }
 }
 
-void NullBackend::submit_compute(std::uint32_t, std::span<const std::uint32_t> command_stream) {
+void NullBackend::execute_graphics(const pm4::Submission& submission) {
+    ++stats_.graphics_submissions;
+    account(submission);
+}
+
+void NullBackend::execute_compute(std::uint32_t, const pm4::Submission& submission) {
     ++stats_.compute_submissions;
-    stats_.dwords_consumed += command_stream.size();
+    account(submission);
 }
 
 std::uint64_t NullBackend::flush() {

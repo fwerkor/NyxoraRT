@@ -43,6 +43,7 @@ add_library(nyxora_core
     src/runtime/tls.cpp
     src/memory/guest_address_space.cpp
     src/memory/native_arena.cpp
+    src/gpu/backend.cpp
     src/gpu/null_backend.cpp
     src/gpu/pm4.cpp
     src/runtime/runtime.cpp

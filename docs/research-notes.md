@@ -45,6 +45,12 @@ Useful observations:
 5. Keep title quirks out of core primitives.
 6. Implement new code independently. No source from the GPL reference projects is incorporated into NyxoraRT.
 
+## Implemented PM4 frontend milestone
+
+The first command-processor milestone uses public AMD/Linux PM4 definitions only to verify packet header fields, Type3 opcode numbers, register-window bases, and packet payload sizes. NyxoraRT independently implements the state machine. The shared frontend currently normalizes Type0 writes, `SET_CONFIG_REG`, `SET_CONTEXT_REG`, `SET_SH_REG`, `SET_UCONFIG_REG`, `NUM_INSTANCES`, `DRAW_INDEX_AUTO`, and `DISPATCH_DIRECT`. Graphics and compute SH state are kept separate, invalid submissions are transactional, and unsupported stateful packets fail rather than being ignored.
+
+The host backend boundary now sits after this normalization step. The null backend consumes typed commands and records semantic submission statistics, while future Vulkan code can consume the same ordered register/draw/dispatch stream without re-decoding PM4. Predication, indirect execution, memory writes, events/barriers, and reset/default-state packets remain deliberately unsupported because their effects cannot yet be represented faithfully.
+
 ## Implemented runtime-linker milestone
 
 The first implementation derived only format and architectural facts from the references, then reimplemented the behavior independently. NyxoraRT now parses SCE dynamic-table offsets from `PT_SCE_DYNLIBDATA`, decodes packed module/library identifiers, models PT_TLS metadata, applies the core x86-64 RELA forms used by the references, and keeps unresolved imports retryable.

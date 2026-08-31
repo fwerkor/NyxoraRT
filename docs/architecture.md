@@ -111,7 +111,11 @@ Guest shader ISA
   -> persistent shader + pipeline cache
 ```
 
-The command frontend must be deterministic and usable without Vulkan. That enables trace replay, fuzzing, unit tests, and remote differential testing later.
+The command frontend must be deterministic and usable without Vulkan. Raw graphics and compute submissions first pass through the shared PM4 processor; a backend receives only a normalized ordered command stream. The current state model tracks Type0 writes and the CONFIG, CONTEXT, graphics-SH, compute-SH, and UCONFIG register spaces. `NUM_INSTANCES`, `DRAW_INDEX_AUTO`, and `DISPATCH_DIRECT` become typed commands. Packet validation is transactional: an unsupported or malformed packet rejects the submission before its register/state changes are committed or delivered to the backend. Compute queues keep independent frontend state, while the graphics queue has its own state.
+
+Predication, indexed/indirect draws, indirect buffers, memory/event/barrier packets, and `CLEAR_STATE` defaults are intentionally rejected until their state and memory side effects are represented. Skipping an unknown packet would make later shader/pipeline state silently wrong.
+
+The command frontend remains usable without Vulkan. That enables trace replay, fuzzing, unit tests, and remote differential testing later.
 
 ### Compatibility layer
 
