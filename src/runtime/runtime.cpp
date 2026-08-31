@@ -8,6 +8,7 @@
 #include <limits>
 #include <span>
 #include <stdexcept>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -56,6 +57,115 @@ bool has_dynamic_segment(const loader::Elf64Image& image) {
                        [](const loader::ProgramHeader& header) {
                            return header.type == loader::kProgramDynamic && header.file_size != 0;
                        });
+}
+
+std::vector<std::string_view> split_search_path(std::string_view value) {
+    std::vector<std::string_view> components;
+    while (!value.empty()) {
+        const auto separator = value.find(':');
+        const auto component = value.substr(0, separator);
+        if (!component.empty()) {
+            components.push_back(component);
+        }
+        if (separator == std::string_view::npos) {
+            break;
+        }
+        value.remove_prefix(separator + 1U);
+    }
+    return components;
+}
+
+void replace_all(std::string& value, std::string_view token, std::string_view replacement) {
+    std::size_t offset = 0;
+    while ((offset = value.find(token, offset)) != std::string::npos) {
+        value.replace(offset, token.size(), replacement);
+        offset += replacement.size();
+    }
+}
+
+std::filesystem::path search_directory(const std::filesystem::path& root,
+                                       const std::filesystem::path& module_path,
+                                       std::string_view component) {
+    auto expanded = std::string(component);
+    const bool uses_origin = component.find("$ORIGIN") != std::string_view::npos ||
+                             component.find("${ORIGIN}") != std::string_view::npos;
+    const auto origin = module_path.parent_path().generic_string();
+    replace_all(expanded, "${ORIGIN}", origin);
+    replace_all(expanded, "$ORIGIN", origin);
+    if (expanded.find('$') != std::string::npos) {
+        throw std::runtime_error("unsupported dynamic search-path token: " +
+                                 std::string(component));
+    }
+
+    std::filesystem::path directory;
+    if (expanded == "/app0" || expanded.starts_with("/app0/")) {
+        const auto relative = expanded.size() == 5 ? std::string_view{}
+                                                  : std::string_view(expanded).substr(6);
+        directory = root / std::filesystem::path(relative);
+    } else {
+        directory = std::filesystem::path(expanded);
+        if (directory.is_absolute()) {
+            if (!uses_origin || !path_is_within(root, directory.lexically_normal())) {
+                throw std::runtime_error("absolute dynamic search path is outside guest /app0: " +
+                                         std::string(component));
+            }
+        } else {
+            if (!expanded.empty() && expanded.front() == '/') {
+                throw std::runtime_error("absolute dynamic search path is outside guest /app0: " +
+                                         std::string(component));
+            }
+            directory = root / directory;
+        }
+    }
+
+    directory = directory.lexically_normal();
+    if (!path_is_within(root, directory)) {
+        throw std::runtime_error("dynamic search path escapes the program root: " +
+                                 std::string(component));
+    }
+    return directory;
+}
+
+std::optional<std::filesystem::path> resolve_dependency_path(
+    const std::filesystem::path& root, const std::filesystem::path& module_path,
+    const loader::DynamicInfo& dynamic, const std::filesystem::path& dependency_name) {
+    std::vector<std::filesystem::path> candidates;
+    candidates.push_back(module_path.parent_path() / dependency_name);
+
+    if (!dependency_name.has_parent_path()) {
+        const std::string_view search =
+            !dynamic.runpath.empty() ? std::string_view(dynamic.runpath)
+                                     : std::string_view(dynamic.rpath);
+        for (const auto component : split_search_path(search)) {
+            candidates.push_back(search_directory(root, module_path, component) / dependency_name);
+        }
+    }
+
+    std::unordered_set<std::string> seen;
+    for (auto candidate : candidates) {
+        candidate = candidate.lexically_normal();
+        if (!path_is_within(root, candidate)) {
+            throw std::runtime_error("DT_NEEDED dependency escapes the program root: " +
+                                     dependency_name.string());
+        }
+        if (!seen.emplace(candidate.generic_string()).second) {
+            continue;
+        }
+
+        std::error_code error;
+        const auto canonical = std::filesystem::canonical(candidate, error);
+        if (error) {
+            continue;
+        }
+        if (!path_is_within(root, canonical)) {
+            throw std::runtime_error("DT_NEEDED dependency escapes the program root: " +
+                                     dependency_name.string());
+        }
+        if (std::filesystem::is_regular_file(canonical, error) && !error) {
+            return canonical;
+        }
+    }
+    return std::nullopt;
 }
 
 struct ModuleFootprint {
@@ -395,27 +505,19 @@ LoadedProgram Runtime::load_program(const std::filesystem::path& path, GuestAddr
         if (pending[index].dynamic) {
             for (const auto& needed : pending[index].dynamic->needed) {
                 const std::filesystem::path dependency_name(needed);
-                if (dependency_name.empty() || dependency_name.is_absolute()) {
+                if (dependency_name.empty() || dependency_name.is_absolute() || needed.front() == '/') {
                     throw std::runtime_error("unsupported absolute or empty DT_NEEDED dependency: " +
                                              needed);
                 }
-                const auto dependency_request = canonical.parent_path() / dependency_name;
-                if (!path_is_within(root, dependency_request.lexically_normal())) {
-                    throw std::runtime_error("DT_NEEDED dependency escapes the program root: " + needed);
-                }
-                std::error_code dependency_error;
                 const auto dependency_path =
-                    std::filesystem::canonical(dependency_request, dependency_error);
-                if (dependency_error) {
+                    resolve_dependency_path(root, canonical, *pending[index].dynamic, dependency_name);
+                if (!dependency_path) {
                     if (hle::libkernel::provides_module(dependency_name.filename().string())) {
                         continue;
                     }
                     throw std::runtime_error("missing DT_NEEDED dependency: " + needed);
                 }
-                if (!path_is_within(root, dependency_path)) {
-                    throw std::runtime_error("DT_NEEDED dependency escapes the program root: " + needed);
-                }
-                const auto dependency_index = discover(dependency_path);
+                const auto dependency_index = discover(*dependency_path);
                 pending[index].dependencies.push_back(dependency_index);
             }
         }

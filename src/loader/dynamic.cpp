@@ -381,6 +381,12 @@ std::optional<DynamicInfo> parse_dynamic_info(const Elf64Image& image) {
         if (const auto offset = first_value(entries, kDynamicSoName)) {
             info.so_name = string_at(info.string_table, *offset);
         }
+        if (const auto offset = first_value(entries, kDynamicRPath)) {
+            info.rpath = string_at(info.string_table, *offset);
+        }
+        if (const auto offset = first_value(entries, kDynamicRunPath)) {
+            info.runpath = string_at(info.string_table, *offset);
+        }
         auto filename = first_value(entries, kDynamicSceOriginalFilename);
         if (!filename) {
             filename = first_value(entries, kDynamicSceOriginalFilename1);

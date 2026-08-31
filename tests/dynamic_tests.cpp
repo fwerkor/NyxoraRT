@@ -66,11 +66,13 @@ std::vector<std::byte> generic_dynamic_elf(std::uint64_t string_address = 0x1050
         test_fixture::put_dynamic(bytes, i, ignored_tag, 0);
     }
     test_fixture::put_dynamic(bytes, 0, nyxora::loader::kDynamicStringTable, string_address);
-    test_fixture::put_dynamic(bytes, 1, nyxora::loader::kDynamicStringTableSize, 8);
+    test_fixture::put_dynamic(bytes, 1, nyxora::loader::kDynamicStringTableSize, 23);
     test_fixture::put_dynamic(bytes, 2, nyxora::loader::kDynamicNeeded, 0);
     test_fixture::put_dynamic(bytes, 3, nyxora::loader::kDynamicSoName, 4);
+    test_fixture::put_dynamic(bytes, 4, nyxora::loader::kDynamicRPath, 7);
+    test_fixture::put_dynamic(bytes, 5, nyxora::loader::kDynamicRunPath, 14);
     test_fixture::put_dynamic(bytes, 17, nyxora::loader::kDynamicNull, 0);
-    constexpr char strings[8] = {'l', 'i', 'b', '\0', 's', 'o', '\0', '\0'};
+    constexpr char strings[23] = "lib\0so\0legacy\0runtime\0";
     std::memcpy(bytes.data() + test_fixture::SceImageLayout::load_offset + 0x50, strings,
                 sizeof(strings));
     return bytes;
@@ -95,6 +97,8 @@ NYXORA_TEST(parses_generic_dynamic_string_table_from_load_segment) {
     NYXORA_CHECK(dynamic->needed.size() == 1);
     NYXORA_CHECK(dynamic->needed[0] == "lib");
     NYXORA_CHECK(dynamic->so_name == "so");
+    NYXORA_CHECK(dynamic->rpath == "legacy");
+    NYXORA_CHECK(dynamic->runpath == "runtime");
 }
 
 NYXORA_TEST(dynamic_parser_rejects_missing_terminator_and_conflicting_layout_tags) {

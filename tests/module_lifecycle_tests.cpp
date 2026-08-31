@@ -32,18 +32,28 @@ void write_file(const std::filesystem::path& path, std::span<const std::byte> by
 }
 
 std::vector<std::byte> add_needed(std::vector<std::byte> bytes,
-                                  std::span<const std::string_view> names) {
+                                  std::span<const std::string_view> names,
+                                  std::string_view rpath = {}, std::string_view runpath = {}) {
     using namespace nyxora::loader;
     auto string_size = read_at<std::uint64_t>(
         bytes, test_fixture::SceImageLayout::dynamic_offset + 16 + 8);
     std::size_t dynamic_index = 17;
-    for (const auto name : names) {
+    const auto append_dynamic_string = [&](std::int64_t tag, std::string_view value) {
         const auto offset = string_size;
         std::memcpy(bytes.data() + test_fixture::SceImageLayout::dynamic_data_offset + string_size,
-                    name.data(), name.size());
-        string_size += name.size();
+                    value.data(), value.size());
+        string_size += value.size();
         bytes[test_fixture::SceImageLayout::dynamic_data_offset + string_size++] = std::byte{0};
-        test_fixture::put_dynamic(bytes, dynamic_index++, kDynamicNeeded, offset);
+        test_fixture::put_dynamic(bytes, dynamic_index++, tag, offset);
+    };
+    for (const auto name : names) {
+        append_dynamic_string(kDynamicNeeded, name);
+    }
+    if (!rpath.empty()) {
+        append_dynamic_string(kDynamicRPath, rpath);
+    }
+    if (!runpath.empty()) {
+        append_dynamic_string(kDynamicRunPath, runpath);
     }
     test_fixture::put_dynamic(bytes, dynamic_index++, kDynamicNull, 0);
     test_fixture::put_dynamic(bytes, 1, kDynamicSceStringTableSize, string_size);
@@ -168,6 +178,73 @@ NYXORA_TEST(runtime_load_program_discovers_needed_files_and_skips_core_hle_modul
     NYXORA_CHECK(program.dependencies[0][0] == 1);
     NYXORA_CHECK(program.dependencies[1].empty());
 #endif
+}
+
+NYXORA_TEST(runtime_load_program_uses_runpath_before_rpath_and_expands_origin) {
+#if defined(__x86_64__) || defined(_M_X64)
+    TempTree tree;
+    std::filesystem::create_directories(tree.root / "legacy");
+    std::filesystem::create_directories(tree.root / "plugins");
+    const std::array<std::string_view, 1> needed{"libdep.prx"};
+    const auto main_bytes = add_needed(test_fixture::sce_dynamic_elf(), needed,
+                                       "$ORIGIN/legacy", "${ORIGIN}/plugins");
+    const auto main_path = tree.root / "main.elf";
+    write_file(main_path, main_bytes);
+    write_file(tree.root / "legacy" / "libdep.prx", simple_dependency_elf());
+    write_file(tree.root / "plugins" / "libdep.prx", simple_dependency_elf());
+
+    const auto page = nyxora::memory::NativeArena::page_size();
+    auto memory = nyxora::memory::GuestAddressSpace::reserve_native(page * 12U);
+    NYXORA_CHECK(memory.has_value());
+    nyxora::runtime::Runtime runtime(std::make_unique<nyxora::gpu::NullBackend>(),
+                                     std::move(*memory));
+    const auto program = runtime.load_program(main_path);
+
+    NYXORA_CHECK(program.modules.size() == 2);
+    NYXORA_CHECK(program.modules[1].path.parent_path().filename() == "plugins");
+    NYXORA_CHECK(program.dependencies[0] == std::vector<std::size_t>{1});
+#endif
+}
+
+NYXORA_TEST(runtime_load_program_uses_rpath_and_maps_guest_app0_paths) {
+#if defined(__x86_64__) || defined(_M_X64)
+    TempTree tree;
+    std::filesystem::create_directories(tree.root / "system" / "lib");
+    const std::array<std::string_view, 1> needed{"libdep.prx"};
+    const auto main_bytes = add_needed(test_fixture::sce_dynamic_elf(), needed,
+                                       "/app0/system/lib");
+    const auto main_path = tree.root / "main.elf";
+    write_file(main_path, main_bytes);
+    write_file(tree.root / "system" / "lib" / "libdep.prx", simple_dependency_elf());
+
+    const auto page = nyxora::memory::NativeArena::page_size();
+    auto memory = nyxora::memory::GuestAddressSpace::reserve_native(page * 12U);
+    NYXORA_CHECK(memory.has_value());
+    nyxora::runtime::Runtime runtime(std::make_unique<nyxora::gpu::NullBackend>(),
+                                     std::move(*memory));
+    const auto program = runtime.load_program(main_path);
+
+    NYXORA_CHECK(program.modules.size() == 2);
+    NYXORA_CHECK(program.modules[1].path.parent_path().filename() == "lib");
+#endif
+}
+
+NYXORA_TEST(runtime_load_program_rejects_search_path_escape_before_mapping) {
+    TempTree tree;
+    const std::array<std::string_view, 1> needed{"libdep.prx"};
+    const auto main_bytes = add_needed(test_fixture::sce_dynamic_elf(), needed, "$ORIGIN/..");
+    const auto main_path = tree.root / "main.elf";
+    write_file(main_path, main_bytes);
+
+    nyxora::runtime::Runtime runtime(std::make_unique<nyxora::gpu::NullBackend>());
+    bool rejected = false;
+    try {
+        (void)runtime.load_program(main_path, 0x500000000ULL);
+    } catch (const std::runtime_error&) {
+        rejected = true;
+    }
+    NYXORA_CHECK(rejected);
+    NYXORA_CHECK(runtime.memory().regions().empty());
 }
 
 NYXORA_TEST(runtime_load_program_discovers_cycles_before_two_phase_linking) {
