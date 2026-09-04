@@ -285,3 +285,129 @@ NYXORA_TEST(pm4_compute_queue_routes_sh_registers_to_compute_state) {
                  0x1234U);
     NYXORA_CHECK(!compute.state().register_value(RegisterSpace::shader_graphics, 0x2c40));
 }
+
+NYXORA_TEST(pm4_processor_discovers_graphics_shader_programs_at_draw_time) {
+    using namespace nyxora::gpu::pm4;
+    const std::array<std::uint32_t, 15> stream{
+        nyxora::test::pm4_packet3(Type3Opcode::set_sh_reg, 5),
+        0x08,
+        0x3456789a,
+        0x12,
+        0x11112222,
+        0x33334444,
+        nyxora::test::pm4_packet3(Type3Opcode::set_sh_reg, 5),
+        0x48,
+        0xabcdef01,
+        0x23,
+        0x55556666,
+        0x77778888,
+        nyxora::test::pm4_packet3(Type3Opcode::draw_index_auto, 2),
+        6,
+        0,
+    };
+
+    Processor processor(QueueType::graphics);
+    const auto submission = processor.process(stream);
+    const auto* draw = std::get_if<DrawIndexAuto>(&submission.commands.back());
+    NYXORA_CHECK(draw != nullptr);
+    NYXORA_CHECK(draw->pixel_shader.has_value());
+    NYXORA_CHECK(draw->pixel_shader->stage == ShaderStage::pixel);
+    NYXORA_CHECK(draw->pixel_shader->address == 0x123456789a00ULL);
+    NYXORA_CHECK(draw->pixel_shader->resource1 == 0x11112222U);
+    NYXORA_CHECK(draw->pixel_shader->resource2 == 0x33334444U);
+    NYXORA_CHECK(draw->vertex_shader.has_value());
+    NYXORA_CHECK(draw->vertex_shader->stage == ShaderStage::vertex);
+    NYXORA_CHECK(draw->vertex_shader->address == 0x23abcdef0100ULL);
+    NYXORA_CHECK(draw->vertex_shader->resource1 == 0x55556666U);
+    NYXORA_CHECK(draw->vertex_shader->resource2 == 0x77778888U);
+}
+
+NYXORA_TEST(pm4_processor_freezes_shader_binding_for_each_draw) {
+    using namespace nyxora::gpu::pm4;
+    Processor processor(QueueType::graphics);
+    const std::array<std::uint32_t, 4> initial_shader{
+        nyxora::test::pm4_packet3(Type3Opcode::set_sh_reg, 3), 0x48, 0x100, 0x1,
+    };
+    (void)processor.process(initial_shader);
+
+    const std::array<std::uint32_t, 10> stream{
+        nyxora::test::pm4_packet3(Type3Opcode::draw_index_auto, 2), 3, 0,
+        nyxora::test::pm4_packet3(Type3Opcode::set_sh_reg, 3), 0x48, 0x200, 0x2,
+        nyxora::test::pm4_packet3(Type3Opcode::draw_index_auto, 2), 6, 0,
+    };
+    const auto submission = processor.process(stream);
+
+    const auto* first_draw = std::get_if<DrawIndexAuto>(&submission.commands[0]);
+    const auto* second_draw = std::get_if<DrawIndexAuto>(&submission.commands[3]);
+    NYXORA_CHECK(first_draw != nullptr && first_draw->vertex_shader.has_value());
+    NYXORA_CHECK(second_draw != nullptr && second_draw->vertex_shader.has_value());
+    NYXORA_CHECK(first_draw->vertex_shader->address == 0x10000010000ULL);
+    NYXORA_CHECK(second_draw->vertex_shader->address == 0x20000020000ULL);
+    NYXORA_CHECK(processor.state().shader_program(ShaderStage::vertex)->address ==
+                 second_draw->vertex_shader->address);
+}
+
+NYXORA_TEST(pm4_processor_discovers_compute_shader_and_ignores_hi_control_bits) {
+    using namespace nyxora::gpu::pm4;
+    const std::array<std::uint32_t, 13> stream{
+        nyxora::test::pm4_packet3(Type3Opcode::set_sh_reg, 3, 0x2),
+        0x20c,
+        0x12345678,
+        0x1ab,
+        nyxora::test::pm4_packet3(Type3Opcode::set_sh_reg, 3, 0x2),
+        0x212,
+        0x01020304,
+        0x05060708,
+        nyxora::test::pm4_packet3(Type3Opcode::dispatch_direct, 4, 0x2),
+        8,
+        2,
+        1,
+        1,
+    };
+
+    Processor processor(QueueType::compute);
+    const auto submission = processor.process(stream);
+    const auto* dispatch = std::get_if<DispatchDirect>(&submission.commands.back());
+    NYXORA_CHECK(dispatch != nullptr && dispatch->compute_shader.has_value());
+    NYXORA_CHECK(dispatch->compute_shader->stage == ShaderStage::compute);
+    NYXORA_CHECK(dispatch->compute_shader->address == 0xab1234567800ULL);
+    NYXORA_CHECK(dispatch->compute_shader->resource1 == 0x01020304U);
+    NYXORA_CHECK(dispatch->compute_shader->resource2 == 0x05060708U);
+}
+
+NYXORA_TEST(pm4_processor_rejects_incomplete_shader_address_transactionally) {
+    using namespace nyxora::gpu::pm4;
+    Processor processor(QueueType::graphics);
+    const std::array<std::uint32_t, 6> stream{
+        nyxora::test::pm4_packet3(Type3Opcode::set_sh_reg, 2), 0x08, 0x1234,
+        nyxora::test::pm4_packet3(Type3Opcode::draw_index_auto, 2), 3, 0,
+    };
+
+    bool rejected = false;
+    try {
+        (void)processor.process(stream);
+    } catch (const std::runtime_error&) {
+        rejected = true;
+    }
+    NYXORA_CHECK(rejected);
+    NYXORA_CHECK(!processor.state().register_value(RegisterSpace::shader_graphics, 0x2c08));
+    NYXORA_CHECK(!processor.state().shader_program(ShaderStage::pixel));
+}
+
+NYXORA_TEST(pm4_processor_allows_shader_address_programming_across_submissions) {
+    using namespace nyxora::gpu::pm4;
+    Processor processor(QueueType::graphics);
+    const std::array<std::uint32_t, 3> lo_only{
+        nyxora::test::pm4_packet3(Type3Opcode::set_sh_reg, 2), 0x48, 0x1234,
+    };
+    (void)processor.process(lo_only);
+
+    const std::array<std::uint32_t, 6> finish_and_draw{
+        nyxora::test::pm4_packet3(Type3Opcode::set_sh_reg, 2), 0x49, 0x5,
+        nyxora::test::pm4_packet3(Type3Opcode::draw_index_auto, 2), 3, 0,
+    };
+    const auto submission = processor.process(finish_and_draw);
+    const auto* draw = std::get_if<DrawIndexAuto>(&submission.commands.back());
+    NYXORA_CHECK(draw != nullptr && draw->vertex_shader.has_value());
+    NYXORA_CHECK(draw->vertex_shader->address == 0x50000123400ULL);
+}

@@ -26,6 +26,8 @@ enum class Type3Opcode : std::uint8_t {
 
 enum class QueueType : std::uint8_t { graphics, compute };
 
+enum class ShaderStage : std::uint8_t { vertex, pixel, compute };
+
 enum class RegisterSpace : std::uint8_t {
     type0,
     config,
@@ -70,9 +72,18 @@ struct SetNumInstances {
     std::uint32_t count{};
 };
 
+struct ShaderProgram {
+    ShaderStage stage{};
+    std::uint64_t address{};
+    std::optional<std::uint32_t> resource1;
+    std::optional<std::uint32_t> resource2;
+};
+
 struct DrawIndexAuto {
     std::uint32_t index_count{};
     std::uint32_t initiator{};
+    std::optional<ShaderProgram> vertex_shader;
+    std::optional<ShaderProgram> pixel_shader;
 };
 
 struct DispatchDirect {
@@ -80,6 +91,7 @@ struct DispatchDirect {
     std::uint32_t groups_y{};
     std::uint32_t groups_z{};
     std::uint32_t initiator{};
+    std::optional<ShaderProgram> compute_shader;
 };
 
 using Command = std::variant<RegisterWrite, SetNumInstances, DrawIndexAuto, DispatchDirect>;
@@ -95,6 +107,7 @@ public:
     [[nodiscard]] std::optional<std::uint32_t> register_value(RegisterSpace space,
                                                               std::uint32_t address) const;
     [[nodiscard]] std::size_t register_count(RegisterSpace space) const noexcept;
+    [[nodiscard]] std::optional<ShaderProgram> shader_program(ShaderStage stage) const;
     [[nodiscard]] std::optional<std::uint32_t> num_instances() const noexcept {
         return num_instances_;
     }

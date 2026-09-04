@@ -3,6 +3,7 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <utility>
 
 namespace nyxora::gpu::pm4 {
 namespace {
@@ -15,6 +16,26 @@ constexpr std::uint32_t context_start = 0xa000;
 constexpr std::uint32_t context_end = 0xa400;
 constexpr std::uint32_t uconfig_start = 0xc000;
 constexpr std::uint32_t uconfig_end = 0xc400;
+
+struct ShaderRegisters {
+    RegisterSpace space;
+    std::uint32_t program_lo;
+    std::uint32_t program_hi;
+    std::uint32_t resource1;
+    std::uint32_t resource2;
+};
+
+[[nodiscard]] ShaderRegisters shader_registers(ShaderStage stage) {
+    switch (stage) {
+    case ShaderStage::vertex:
+        return {RegisterSpace::shader_graphics, 0x2c48, 0x2c49, 0x2c4a, 0x2c4b};
+    case ShaderStage::pixel:
+        return {RegisterSpace::shader_graphics, 0x2c08, 0x2c09, 0x2c0a, 0x2c0b};
+    case ShaderStage::compute:
+        return {RegisterSpace::shader_compute, 0x2e0c, 0x2e0d, 0x2e12, 0x2e13};
+    }
+    throw std::runtime_error("invalid PM4 shader stage");
+}
 
 [[nodiscard]] Type3Opcode opcode_of(const PacketView& packet) {
     return static_cast<Type3Opcode>(packet.type3_opcode);
@@ -134,6 +155,26 @@ std::size_t State::register_count(RegisterSpace space) const noexcept {
     return registers_[index(space)].size();
 }
 
+std::optional<ShaderProgram> State::shader_program(ShaderStage stage) const {
+    const auto registers = shader_registers(stage);
+    const auto lo = register_value(registers.space, registers.program_lo);
+    const auto hi = register_value(registers.space, registers.program_hi);
+    if (!lo && !hi) {
+        return std::nullopt;
+    }
+    if (!lo || !hi) {
+        throw std::runtime_error("incomplete PM4 shader program address");
+    }
+
+    const auto encoded_address = (static_cast<std::uint64_t>(*hi & 0xffU) << 32U) | *lo;
+    return ShaderProgram{
+        .stage = stage,
+        .address = encoded_address << 8U,
+        .resource1 = register_value(registers.space, registers.resource1),
+        .resource2 = register_value(registers.space, registers.resource2),
+    };
+}
+
 void State::apply(const Command& command) {
     std::visit(
         [this](const auto& value) {
@@ -149,11 +190,13 @@ void State::apply(const Command& command) {
 
 Submission Processor::process(std::span<const std::uint32_t> stream) {
     Submission submission{.dwords_consumed = stream.size(), .packets_decoded = 0, .commands = {}};
+    State working_state = state_;
     Decoder decoder(stream);
 
     while (!decoder.done()) {
         const auto packet = decoder.next();
         ++submission.packets_decoded;
+        const auto first_new_command = submission.commands.size();
 
         switch (packet.type) {
         case PacketType::type0:
@@ -215,7 +258,11 @@ Submission Processor::process(std::span<const std::uint32_t> stream) {
                 }
                 require_payload(packet, 2);
                 submission.commands.emplace_back(DrawIndexAuto{
-                    .index_count = packet.payload[0], .initiator = packet.payload[1]});
+                    .index_count = packet.payload[0],
+                    .initiator = packet.payload[1],
+                    .vertex_shader = working_state.shader_program(ShaderStage::vertex),
+                    .pixel_shader = working_state.shader_program(ShaderStage::pixel),
+                });
                 break;
             case Type3Opcode::dispatch_direct:
                 require_unpredicated(packet);
@@ -225,6 +272,7 @@ Submission Processor::process(std::span<const std::uint32_t> stream) {
                     .groups_y = packet.payload[1],
                     .groups_z = packet.payload[2],
                     .initiator = packet.payload[3],
+                    .compute_shader = working_state.shader_program(ShaderStage::compute),
                 });
                 break;
             default:
@@ -233,11 +281,13 @@ Submission Processor::process(std::span<const std::uint32_t> stream) {
             }
             break;
         }
+
+        for (std::size_t i = first_new_command; i < submission.commands.size(); ++i) {
+            working_state.apply(submission.commands[i]);
+        }
     }
 
-    for (const auto& command : submission.commands) {
-        state_.apply(command);
-    }
+    state_ = std::move(working_state);
     return submission;
 }
 
