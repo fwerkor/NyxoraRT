@@ -32,7 +32,8 @@ The initial framework already provides:
 - POSIX guest fault capture for SIGSEGV/SIGBUS/SIGILL and Windows x64 vectored-exception recovery, both returning through the native entry recovery epilogue; the same recovery route provides `pthread_exit` without C++ unwinding or cross-stack `longjmp`;
 - `GuestThread`/`Runtime::start_thread()` plus a runtime-owned thread manager, with `pthread_create`, join/timed-join, `pthread_self`, `pthread_detach`, and `pthread_exit` HLE for `libkernel` and `libScePosix`; timed join uses an absolute realtime deadline without consuming the handle on timeout, stack-size/detach-state attributes are consumed at create time, and detached guest threads remain host-owned until completion/shutdown rather than escaping the runtime;
 - a Windows x64 HLE bridge that remaps up to seven SysV integer/pointer arguments to MS-x64, including guest stack arguments, and switches C++ host calls back to the suspended OS thread stack instead of running substantial host code on the guest stack;
-- a bounds-checked PM4 command frontend that transactionally validates submissions, tracks Type0 plus CONFIG/CONTEXT/SH/UCONFIG register state, separates graphics/compute shader banks, normalizes `NUM_INSTANCES`, `DRAW_INDEX_AUTO`, and `DISPATCH_DIRECT` into typed commands, discovers VS/PS/CS program addresses and resource words from SH state at command time, and feeds the same normalized stream to the deterministic null backend;
+- a bounds-checked PM4 command frontend that transactionally validates submissions, tracks Type0 plus CONFIG/CONTEXT/SH/UCONFIG register state, separates graphics/compute shader banks, normalizes `NUM_INSTANCES`, `INDEX_TYPE`, `DRAW_INDEX_AUTO`, `DRAW_INDEX_2`, and `DISPATCH_DIRECT` into typed commands, discovers VS/PS/CS program addresses and resource words from SH state at command time, snapshots raw index format and index-buffer address for indexed draws, and models the verified VGT_INDEX_TYPE indexed-UCONFIG write, and feeds the same normalized stream to the deterministic null backend;
+- a deterministic PM4 trace replay CLI that validates headerless little-endian captures and emits structured JSON with full-precision guest addresses, independent of a Vulkan driver;
 - unit tests and CI-ready CMake/CTest targets.
 
 ```bash
@@ -46,6 +47,16 @@ To inspect a legal, unencrypted x86-64 ELF test image:
 ```bash
 ./build/nyxora ./path/to/test.elf
 ```
+
+To inspect a raw, unencrypted PM4 submission without GPU execution:
+
+```bash
+./build/nyxora --pm4-replay graphics ./path/to/graphics.pm4
+./build/nyxora --pm4-replay compute ./path/to/compute.pm4
+```
+
+See [PM4 trace replay](docs/pm4-trace.md) for binary format, bounded input size,
+JSON output and currently unsupported GPU semantics.
 
 ## Near-term roadmap
 

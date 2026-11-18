@@ -11,7 +11,8 @@ void NullBackend::account(const pm4::Submission& submission) {
     for (const auto& command : submission.commands) {
         if (std::holds_alternative<pm4::RegisterWrite>(command)) {
             ++stats_.register_writes;
-        } else if (std::holds_alternative<pm4::DrawIndexAuto>(command)) {
+        } else if (std::holds_alternative<pm4::DrawIndexAuto>(command) ||
+                   std::holds_alternative<pm4::DrawIndex2>(command)) {
             ++stats_.draw_calls;
         } else if (std::holds_alternative<pm4::DispatchDirect>(command)) {
             ++stats_.dispatch_calls;

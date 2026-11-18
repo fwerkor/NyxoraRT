@@ -16,12 +16,15 @@ enum class PacketType : std::uint8_t { type0 = 0, type1 = 1, type2 = 2, type3 = 
 enum class Type3Opcode : std::uint8_t {
     nop = 0x10,
     dispatch_direct = 0x15,
+    draw_index_2 = 0x27,
+    index_type = 0x2a,
     draw_index_auto = 0x2d,
     num_instances = 0x2f,
     set_config_reg = 0x68,
     set_context_reg = 0x69,
     set_sh_reg = 0x76,
     set_uconfig_reg = 0x79,
+    set_uconfig_reg_index = 0x7a,
 };
 
 enum class QueueType : std::uint8_t { graphics, compute };
@@ -72,6 +75,12 @@ struct SetNumInstances {
     std::uint32_t count{};
 };
 
+// The low two bits are a raw guest index format selector; interpretation
+// belongs in the renderer, not in the packet frontend.
+struct SetIndexType {
+    std::uint32_t raw{};
+};
+
 struct ShaderProgram {
     ShaderStage stage{};
     std::uint64_t address{};
@@ -86,6 +95,16 @@ struct DrawIndexAuto {
     std::optional<ShaderProgram> pixel_shader;
 };
 
+struct DrawIndex2 {
+    std::uint32_t max_size{};
+    std::uint64_t index_address{};
+    std::uint32_t index_count{};
+    std::uint32_t initiator{};
+    std::optional<std::uint32_t> index_type;
+    std::optional<ShaderProgram> vertex_shader;
+    std::optional<ShaderProgram> pixel_shader;
+};
+
 struct DispatchDirect {
     std::uint32_t groups_x{};
     std::uint32_t groups_y{};
@@ -94,7 +113,9 @@ struct DispatchDirect {
     std::optional<ShaderProgram> compute_shader;
 };
 
-using Command = std::variant<RegisterWrite, SetNumInstances, DrawIndexAuto, DispatchDirect>;
+using Command =
+    std::variant<RegisterWrite, SetNumInstances, SetIndexType, DrawIndexAuto, DrawIndex2,
+                 DispatchDirect>;
 
 struct Submission {
     std::size_t dwords_consumed{};
@@ -111,6 +132,9 @@ public:
     [[nodiscard]] std::optional<std::uint32_t> num_instances() const noexcept {
         return num_instances_;
     }
+    [[nodiscard]] std::optional<std::uint32_t> index_type() const noexcept {
+        return index_type_;
+    }
 
 private:
     friend class Processor;
@@ -124,6 +148,7 @@ private:
 
     std::array<RegisterMap, register_space_count> registers_;
     std::optional<std::uint32_t> num_instances_;
+    std::optional<std::uint32_t> index_type_;
 };
 
 class Processor {
