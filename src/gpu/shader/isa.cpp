@@ -1,6 +1,8 @@
 #include "nyxora/gpu/shader/isa.hpp"
 
 #include <cstdint>
+#include <ostream>
+#include <stdexcept>
 
 namespace nyxora::gpu::shader {
 namespace {
@@ -32,6 +34,23 @@ std::optional<ScalarOpcode> classify(std::uint32_t opcode) {
     default:
         return std::nullopt;
     }
+}
+
+const char* opcode_name(ScalarOpcode opcode) {
+    switch (opcode) {
+    case ScalarOpcode::nop: return "s_nop";
+    case ScalarOpcode::end_program: return "s_endpgm";
+    case ScalarOpcode::branch: return "s_branch";
+    case ScalarOpcode::branch_scc0: return "s_cbranch_scc0";
+    case ScalarOpcode::branch_scc1: return "s_cbranch_scc1";
+    case ScalarOpcode::branch_vccz: return "s_cbranch_vccz";
+    case ScalarOpcode::branch_vccnz: return "s_cbranch_vccnz";
+    case ScalarOpcode::branch_execz: return "s_cbranch_execz";
+    case ScalarOpcode::branch_execnz: return "s_cbranch_execnz";
+    case ScalarOpcode::barrier: return "s_barrier";
+    case ScalarOpcode::waitcnt: return "s_waitcnt";
+    }
+    throw std::runtime_error("invalid decoded scalar opcode");
 }
 
 bool is_branch(ScalarOpcode opcode) {
@@ -92,6 +111,28 @@ std::optional<ScalarProgram> decode_sopp_program(std::span<const std::uint32_t> 
         return std::nullopt;
     }
     return result;
+}
+
+void write_sopp_json(std::ostream& output, const ScalarProgram& program) {
+    output << "{\"isa\":\"sopp-subset\",\"instructions\":[";
+    bool first = true;
+    for (const auto& instruction : program.instructions) {
+        if (!first) {
+            output << ",";
+        }
+        first = false;
+        output << "{\"offset_dwords\":" << instruction.offset_dwords
+               << ",\"opcode\":\"" << opcode_name(instruction.opcode)
+               << "\",\"immediate\":" << instruction.immediate
+               << ",\"branch_target_dwords\":";
+        if (instruction.branch_target_dwords) {
+            output << *instruction.branch_target_dwords;
+        } else {
+            output << "null";
+        }
+        output << "}";
+    }
+    output << "]}\n";
 }
 
 std::optional<ScalarProgram>

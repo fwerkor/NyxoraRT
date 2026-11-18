@@ -42,6 +42,18 @@ word-relative branch target. Input is bounded to 65,536 dwords and must
 terminate in `S_ENDPGM`. Any unknown instruction or out-of-bounds branch
 causes rejection instead of pretending the shader has been translated.
 
+For an unencrypted raw little-endian SOPP-only binary, run:
+
+```bash
+./build/nyxora --shader-sopp ./test-program.bin
+```
+
+The CLI emits one JSON object with `isa: sopp-subset` and typed instruction
+records (`offset_dwords`, opcode mnemonic, signed immediate, and nullable
+branch target). Invalid/truncated bytecode returns a nonzero exit status. It
+accepts at most 65,536 dwords. This is an inspection tool, not executable
+shader translation.
+
 `shader::decode_guest_sopp_program` combines a memory snapshot with
 this decoder. The integration test exercises a synthetic PM4
 `SET_SH_REG` + `DISPATCH_DIRECT` submission, resolves the resulting

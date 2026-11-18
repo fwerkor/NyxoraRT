@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <iosfwd>
 #include <span>
 #include <vector>
 
@@ -41,6 +42,8 @@ struct ScalarProgram {
 // must terminate with S_ENDPGM, and all branch destinations must be in bounds.
 [[nodiscard]] std::optional<ScalarProgram>
 decode_sopp_program(std::span<const std::uint32_t> words);
+
+void write_sopp_json(std::ostream& output, const ScalarProgram& program);
 
 [[nodiscard]] std::optional<ScalarProgram>
 decode_guest_sopp_program(const GuestMemoryReader& reader, const pm4::ShaderProgram& binding,

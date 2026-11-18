@@ -9,6 +9,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <vector>
+#include <sstream>
+#include <string>
 
 namespace {
 
@@ -73,6 +75,24 @@ NYXORA_TEST(shader_sopp_rejects_bad_encoding_and_incomplete_programs) {
     NYXORA_CHECK(!decode_sopp_program(branch_before));
     std::vector<std::uint32_t> oversized(65537U, sopp(0));
     NYXORA_CHECK(!decode_sopp_program(oversized));
+}
+
+
+NYXORA_TEST(shader_sopp_json_preserves_branch_targets_and_signed_immediates) {
+    const std::array<std::uint32_t, 3> words{
+        sopp(0), sopp(2, 0xfffe), sopp(1),
+    };
+    const auto decoded = nyxora::gpu::shader::decode_sopp_program(words);
+    NYXORA_CHECK(decoded);
+    std::ostringstream out;
+    nyxora::gpu::shader::write_sopp_json(out, *decoded);
+    const auto json = out.str();
+    NYXORA_CHECK(json.find("\"isa\":\"sopp-subset\"") != std::string::npos);
+    NYXORA_CHECK(json.find("\"opcode\":\"s_branch\",\"immediate\":-2") !=
+                 std::string::npos);
+    NYXORA_CHECK(json.find("\"branch_target_dwords\":0") != std::string::npos);
+    NYXORA_CHECK(json.find("\"opcode\":\"s_endpgm\"") != std::string::npos);
+    NYXORA_CHECK(!json.empty() && json.back() == '\n');
 }
 
 NYXORA_TEST(shader_sopp_waitcnt_is_preserved_without_executing) {

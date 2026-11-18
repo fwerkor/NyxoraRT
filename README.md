@@ -58,7 +58,14 @@ To inspect a raw, unencrypted PM4 submission without GPU execution:
 
 See [PM4 trace replay](docs/pm4-trace.md) for binary format, bounded input size,
 JSON output and currently unsupported GPU semantics. See [GPU memory and SOPP](docs/gpu-memory-and-sopp.md)
-for the diagnostic guest-memory and initial shader-decoder work.
+for the diagnostic guest-memory and initial shader-decoder work. A bounded SOPP-only
+raw shader binary can be inspected with:
+
+```bash
+./build/nyxora --shader-sopp ./path/to/shader.bin
+```
+
+This outputs decoded control-flow metadata as JSON, not executable SPIR-V.
 
 ## Near-term roadmap
 
