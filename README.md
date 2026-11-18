@@ -34,6 +34,7 @@ The initial framework already provides:
 - a Windows x64 HLE bridge that remaps up to seven SysV integer/pointer arguments to MS-x64, including guest stack arguments, and switches C++ host calls back to the suspended OS thread stack instead of running substantial host code on the guest stack;
 - a bounds-checked PM4 command frontend that transactionally validates submissions, tracks Type0 plus CONFIG/CONTEXT/SH/UCONFIG register state, separates graphics/compute shader banks, normalizes `NUM_INSTANCES`, `INDEX_TYPE`, `DRAW_INDEX_AUTO`, `DRAW_INDEX_2`, and `DISPATCH_DIRECT` into typed commands, discovers VS/PS/CS program addresses and resource words from SH state at command time, snapshots raw index format and index-buffer address for indexed draws, and models the verified VGT_INDEX_TYPE indexed-UCONFIG write, and feeds the same normalized stream to the deterministic null backend;
 - a deterministic PM4 trace replay CLI that validates headerless little-endian captures and emits structured JSON with full-precision guest addresses, independent of a Vulkan driver;
+- a protected, bounded guest-GPU memory snapshot helper for mapped index buffers and shader words, plus a strict SOPP-only scalar shader control-flow decoder for synthetic programs;
 - unit tests and CI-ready CMake/CTest targets.
 
 ```bash
@@ -56,7 +57,8 @@ To inspect a raw, unencrypted PM4 submission without GPU execution:
 ```
 
 See [PM4 trace replay](docs/pm4-trace.md) for binary format, bounded input size,
-JSON output and currently unsupported GPU semantics.
+JSON output and currently unsupported GPU semantics. See [GPU memory and SOPP](docs/gpu-memory-and-sopp.md)
+for the diagnostic guest-memory and initial shader-decoder work.
 
 ## Near-term roadmap
 
