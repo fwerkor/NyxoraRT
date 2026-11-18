@@ -16,6 +16,8 @@ constexpr std::uint32_t context_start = 0xa000;
 constexpr std::uint32_t context_end = 0xa400;
 constexpr std::uint32_t uconfig_start = 0xc000;
 constexpr std::uint32_t uconfig_end = 0xc400;
+constexpr std::uint32_t vgt_index_type = 0xc243;
+constexpr std::uint32_t uconfig_index_type_selector = 0x20000000U;
 
 struct ShaderRegisters {
     RegisterSpace space;
@@ -181,8 +183,13 @@ void State::apply(const Command& command) {
             using T = std::decay_t<decltype(value)>;
             if constexpr (std::is_same_v<T, RegisterWrite>) {
                 registers_[index(value.space)][value.address] = value.value;
+                if (value.space == RegisterSpace::uconfig && value.address == vgt_index_type) {
+                    index_type_ = value.value & 0x3U;
+                }
             } else if constexpr (std::is_same_v<T, SetNumInstances>) {
                 num_instances_ = value.count;
+            } else if constexpr (std::is_same_v<T, SetIndexType>) {
+                index_type_ = value.raw & 0x3U;
             }
         },
         command);
@@ -243,6 +250,29 @@ Submission Processor::process(std::span<const std::uint32_t> stream) {
                 append_register_writes(packet, RegisterSpace::uconfig, uconfig_start, uconfig_end,
                                        submission.commands);
                 break;
+            case Type3Opcode::set_uconfig_reg_index:
+                require_unpredicated(packet);
+                // Indexed UCONFIG uses an additional semantic selector.
+                // Support only the verified VGT_INDEX_TYPE selector for now.
+                require_payload(packet, 2);
+                if (packet.payload[0] !=
+                    (uconfig_index_type_selector | (vgt_index_type - uconfig_start))) {
+                    throw std::runtime_error("unsupported indexed PM4 UCONFIG register selector");
+                }
+                submission.commands.emplace_back(RegisterWrite{
+                    .space = RegisterSpace::uconfig,
+                    .address = vgt_index_type,
+                    .value = packet.payload[1],
+                });
+                break;
+            case Type3Opcode::index_type:
+                require_unpredicated(packet);
+                if (queue_type_ != QueueType::graphics || packet.compute) {
+                    throw std::runtime_error("INDEX_TYPE is only supported on the graphics path");
+                }
+                require_payload(packet, 1);
+                submission.commands.emplace_back(SetIndexType{.raw = packet.payload[0]});
+                break;
             case Type3Opcode::num_instances:
                 require_unpredicated(packet);
                 if (queue_type_ != QueueType::graphics || packet.compute) {
@@ -260,6 +290,23 @@ Submission Processor::process(std::span<const std::uint32_t> stream) {
                 submission.commands.emplace_back(DrawIndexAuto{
                     .index_count = packet.payload[0],
                     .initiator = packet.payload[1],
+                    .vertex_shader = working_state.shader_program(ShaderStage::vertex),
+                    .pixel_shader = working_state.shader_program(ShaderStage::pixel),
+                });
+                break;
+            case Type3Opcode::draw_index_2:
+                require_unpredicated(packet);
+                if (queue_type_ != QueueType::graphics || packet.compute) {
+                    throw std::runtime_error("DRAW_INDEX_2 is only supported on the graphics path");
+                }
+                require_payload(packet, 5);
+                submission.commands.emplace_back(DrawIndex2{
+                    .max_size = packet.payload[0],
+                    .index_address = static_cast<std::uint64_t>(packet.payload[1]) |
+                                     (static_cast<std::uint64_t>(packet.payload[2]) << 32U),
+                    .index_count = packet.payload[3],
+                    .initiator = packet.payload[4],
+                    .index_type = working_state.index_type(),
                     .vertex_shader = working_state.shader_program(ShaderStage::vertex),
                     .pixel_shader = working_state.shader_program(ShaderStage::pixel),
                 });

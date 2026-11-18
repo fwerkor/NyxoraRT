@@ -97,6 +97,7 @@ if(NYXORA_BUILD_TESTS)
         tests/tls_tests.cpp
         tests/gpu_backend_tests.cpp
         tests/pm4_tests.cpp
+        tests/pm4_indexed_tests.cpp
     )
     target_link_libraries(nyxora_tests PRIVATE NyxoraRT::core)
     add_test(NAME nyxora_tests COMMAND nyxora_tests)
