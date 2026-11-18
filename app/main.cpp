@@ -7,24 +7,43 @@
 
 #include "nyxora/gpu/null_backend.hpp"
 #include "nyxora/gpu/pm4_trace.hpp"
+#include "nyxora/gpu/shader/isa.hpp"
 #include "nyxora/runtime/runtime.hpp"
 
 namespace {
 
 void usage() {
     std::cerr << "usage: nyxora <x86-64-elf>\n"
-              << "       nyxora --pm4-replay <graphics|compute> <trace.pm4>\n";
+              << "       nyxora --pm4-replay <graphics|compute> <trace.pm4>\n"
+              << "       nyxora --shader-sopp <shader.bin>\n";
 }
 
 } // namespace
 
 int main(int argc, char** argv) {
-    if (argc != 2 && argc != 4) {
+    if (argc != 2 && argc != 3 && argc != 4) {
         usage();
         return 2;
     }
 
     try {
+        if (argc == 3) {
+            if (std::string_view(argv[1]) != "--shader-sopp") {
+                usage();
+                return 2;
+            }
+            std::ifstream file(argv[2], std::ios::binary);
+            if (!file) {
+                throw std::runtime_error("could not open shader bytecode file");
+            }
+            const auto words = nyxora::gpu::pm4::read_binary_trace(file, 65536U);
+            const auto program = nyxora::gpu::shader::decode_sopp_program(words);
+            if (!program) {
+                throw std::runtime_error("unsupported or invalid SOPP-only shader program");
+            }
+            nyxora::gpu::shader::write_sopp_json(std::cout, *program);
+            return 0;
+        }
         if (argc == 4) {
             if (std::string_view(argv[1]) != "--pm4-replay") {
                 usage();

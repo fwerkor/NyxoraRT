@@ -59,6 +59,10 @@ Public opcode/packet definitions and an independently constructed synthetic PM4 
 
 A standalone binary PM4 reader with explicit little-endian decoding and a bounded size limit feeds the same transactional processor used by the null GPU backend. Machine-readable normalized commands record indexed-draw state, shader addresses, and other typed operations without GPU execution. The output preserves 64-bit addresses as hexadecimal JSON strings, which enables corpus replay and comparison tools to consume guest VA values without floating-point precision loss. This is a per-submission trace inspection tool, not a shader interpreter or renderer.
 
+## Bounded GPU guest-resource and scalar SOPP milestone
+
+The memory bridge now checks `GuestAddressSpace` region readability/commitment across adjacent mappings before copying index buffers or shader words. It decodes 8-, 16-, and 32-bit VGT_INDEX_TYPE data with no host-endianness assumptions; those raw values were checked against Mesa gfx103 register definitions. A strict initial AMD RDNA SOPP decoder recognizes a limited scalar control-flow subset, preserving signed branch targets and rejecting all unknown/unsupported encodings. Its one-word-only program constraint is intentional, because real shaders need mixed-width decode and full IR translation. An end-to-end synthetic PM4 fixture validates shader-address discovery, memory readback and scalar decoding without a GPU.
+
 ## Implemented runtime-linker milestone
 
 The first implementation derived only format and architectural facts from the references, then reimplemented the behavior independently. NyxoraRT now parses SCE dynamic-table offsets from `PT_SCE_DYNLIBDATA`, decodes packed module/library identifiers, models PT_TLS metadata, applies the core x86-64 RELA forms used by the references, and keeps unresolved imports retryable.
