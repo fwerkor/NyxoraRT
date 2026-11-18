@@ -55,6 +55,10 @@ The host backend boundary now sits after this normalization step. The frontend a
 
 Public opcode/packet definitions and an independently constructed synthetic PM4 corpus were used to verify `DRAW_INDEX_2` (five payload dwords: maximum size, 64-bit index address, count, draw initiator), `INDEX_TYPE` and the indexed `VGT_INDEX_TYPE` UCONFIG selector. NyxoraRT now models the latter index-format state on the graphics queue, preserves its per-draw snapshot with shader bindings, and rejects unknown indexed UCONFIG selectors transactionally. The frontend does not dereference guest index buffers, validate their residency, or interpret the raw index format selector; those require the future memory/renderer bridge. This implementation is independent of the reference projects.
 
+## Deterministic PM4 trace replay milestone
+
+A standalone binary PM4 reader with explicit little-endian decoding and a bounded size limit feeds the same transactional processor used by the null GPU backend. Machine-readable normalized commands record indexed-draw state, shader addresses, and other typed operations without GPU execution. The output preserves 64-bit addresses as hexadecimal JSON strings, which enables corpus replay and comparison tools to consume guest VA values without floating-point precision loss. This is a per-submission trace inspection tool, not a shader interpreter or renderer.
+
 ## Implemented runtime-linker milestone
 
 The first implementation derived only format and architectural facts from the references, then reimplemented the behavior independently. NyxoraRT now parses SCE dynamic-table offsets from `PT_SCE_DYNLIBDATA`, decodes packed module/library identifiers, models PT_TLS metadata, applies the core x86-64 RELA forms used by the references, and keeps unresolved imports retryable.
