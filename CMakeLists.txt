@@ -4,6 +4,7 @@ project(NyxoraRT VERSION 0.1.0 LANGUAGES CXX)
 option(NYXORA_BUILD_TESTS "Build NyxoraRT tests" ON)
 option(NYXORA_ENABLE_WERROR "Treat warnings as errors" OFF)
 option(NYXORA_ENABLE_COVERAGE "Enable source coverage instrumentation" OFF)
+option(NYXORA_ENABLE_VULKAN_DIAGNOSTICS "Build headless Vulkan scalar diagnostic runner" OFF)
 
 if(NYXORA_ENABLE_COVERAGE AND NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     message(FATAL_ERROR "NYXORA_ENABLE_COVERAGE requires GCC or Clang")
@@ -82,6 +83,24 @@ endif()
 add_executable(nyxora app/main.cpp)
 target_link_libraries(nyxora PRIVATE NyxoraRT::core)
 
+if(NYXORA_ENABLE_VULKAN_DIAGNOSTICS)
+    find_package(Vulkan REQUIRED)
+    add_executable(nyxora_vulkan_scalar tools/vulkan_scalar_runner.cpp)
+    target_compile_features(nyxora_vulkan_scalar PRIVATE cxx_std_20)
+    target_link_libraries(nyxora_vulkan_scalar PRIVATE Vulkan::Vulkan)
+    if(MSVC)
+        target_compile_options(nyxora_vulkan_scalar PRIVATE /W4 /permissive-)
+        if(NYXORA_ENABLE_WERROR)
+            target_compile_options(nyxora_vulkan_scalar PRIVATE /WX)
+        endif()
+    else()
+        target_compile_options(nyxora_vulkan_scalar PRIVATE -Wall -Wextra -Wpedantic)
+        if(NYXORA_ENABLE_WERROR)
+            target_compile_options(nyxora_vulkan_scalar PRIVATE -Werror)
+        endif()
+    endif()
+endif()
+
 if(NYXORA_BUILD_TESTS)
     enable_testing()
     add_executable(nyxora_tests
@@ -122,5 +141,11 @@ if(NYXORA_BUILD_TESTS)
         add_test(NAME nyxora_spirv_conformance
             COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/spirv_conformance.py
                     $<TARGET_FILE:nyxora> ${NYXORA_SPIRV_VAL_EXECUTABLE})
+        if(TARGET nyxora_vulkan_scalar)
+            add_test(NAME nyxora_vulkan_scalar_conformance
+                COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/spirv_conformance.py
+                        $<TARGET_FILE:nyxora> ${NYXORA_SPIRV_VAL_EXECUTABLE}
+                        $<TARGET_FILE:nyxora_vulkan_scalar>)
+        endif()
     endif()
 endif()

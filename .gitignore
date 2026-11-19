@@ -1,7 +1,9 @@
 /build/
 /build-coverage/
+/build-vulkan/
 /cmake-build-*/
 *.user
 .vscode/
 .idea/
 .DS_Store
+__pycache__/

@@ -19,6 +19,23 @@ jobs:
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure
 
+  vulkan-diagnostic:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Vulkan SDK, Lavapipe and SPIR-V validator
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libvulkan-dev mesa-vulkan-drivers spirv-tools
+      - name: Configure headless Vulkan diagnostic target
+        run: cmake -S . -B build-vulkan -DNYXORA_ENABLE_VULKAN_DIAGNOSTICS=ON -DNYXORA_ENABLE_WERROR=ON
+      - name: Build diagnostic tool
+        run: cmake --build build-vulkan --parallel
+      - name: Compare real Vulkan scalar output to semantic oracle
+        shell: bash
+        run: |
+          ICD=$(find /usr/share/vulkan/icd.d -maxdepth 1 -name 'lvp_icd*.json' -print -quit)
+          test -n "$ICD"
+          VK_ICD_FILENAMES="$ICD" ctest --test-dir build-vulkan -R '^nyxora_vulkan_scalar_conformance$' --output-on-failure
+
   coverage:
     runs-on: ubuntu-latest
     steps:
