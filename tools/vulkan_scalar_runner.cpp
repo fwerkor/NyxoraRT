@@ -9,6 +9,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -66,7 +67,8 @@ std::vector<std::uint32_t> read_spv(const char* filename) {
     return words;
 }
 
-void execute(const std::vector<std::uint32_t>& words) {
+void execute(const std::vector<std::uint32_t>& words, bool vector_mode,
+             bool seeded_vector) {
     VulkanState state;
     VkApplicationInfo application{};
     application.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -114,7 +116,8 @@ void execute(const std::vector<std::uint32_t>& words) {
     VkQueue queue = VK_NULL_HANDLE;
     vkGetDeviceQueue(state.device, queue_family, 0, &queue);
 
-    constexpr VkDeviceSize buffer_size = 103U * sizeof(std::uint32_t);
+    const VkDeviceSize buffer_size =
+        (vector_mode ? 256U * 32U : 103U) * sizeof(std::uint32_t);
     VkBufferCreateInfo buffer_info{};
     buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     buffer_info.size = buffer_size;
@@ -146,6 +149,13 @@ void execute(const std::vector<std::uint32_t>& words) {
     check(vkMapMemory(state.device, state.memory, 0, buffer_size, 0, &mapped), "vkMapMemory");
     state.mapped_pointer = mapped;
     std::memset(mapped, 0, static_cast<std::size_t>(buffer_size));
+    if (seeded_vector) {
+        auto* values = static_cast<std::uint32_t*>(mapped);
+        for (std::size_t i = 0; i < 256U * 32U; ++i) {
+            values[i] = static_cast<std::uint32_t>(i * 1664525U + 1013904223U) ^
+                        0x9e3779b9U;
+        }
+    }
 
     VkShaderModuleCreateInfo shader_info{};
     shader_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
@@ -243,23 +253,35 @@ void execute(const std::vector<std::uint32_t>& words) {
     check(vkQueueWaitIdle(queue), "vkQueueWaitIdle");
 
     const auto* result = static_cast<const std::uint32_t*>(mapped);
-    std::cout << "{\"sgpr\":[";
-    for (std::size_t i = 0; i < 102; ++i) {
-        if (i) std::cout << ",";
-        std::cout << result[i];
+    if (vector_mode) {
+        std::cout << "{\"lanes\":32,\"vgpr\":[";
+        for (std::size_t i = 0; i < 256U * 32U; ++i) {
+            if (i) std::cout << ",";
+            std::cout << result[i];
+        }
+        std::cout << "]}\n";
+    } else {
+        std::cout << "{\"sgpr\":[";
+        for (std::size_t i = 0; i < 102; ++i) {
+            if (i) std::cout << ",";
+            std::cout << result[i];
+        }
+        std::cout << "],\"scc\":" << result[102] << "}\n";
     }
-    std::cout << "],\"scc\":" << result[102] << "}\n";
 }
 
 } // namespace
 
 int main(int argc, char** argv) {
-    if (argc != 2) {
-        std::cerr << "usage: nyxora-vulkan-scalar <shader.spv>\n";
+    const auto option = argc == 3 ? std::string_view(argv[1]) : std::string_view{};
+    const auto vector_mode = option == "--vector" || option == "--vector-seeded";
+    if (argc != 2 && !(argc == 3 && vector_mode)) {
+        std::cerr << "usage: nyxora-vulkan-scalar [--vector|--vector-seeded] <shader.spv>\n";
         return 2;
     }
     try {
-        execute(read_spv(argv[1]));
+        execute(read_spv(argv[vector_mode ? 2 : 1]), vector_mode,
+                option == "--vector-seeded");
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "nyxora-vulkan-scalar: " << error.what() << '\n';
