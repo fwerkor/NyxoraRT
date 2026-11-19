@@ -88,18 +88,42 @@ target_link_libraries(nyxora PRIVATE NyxoraRT::core)
 
 if(NYXORA_ENABLE_VULKAN_DIAGNOSTICS)
     find_package(Vulkan REQUIRED)
+    find_program(NYXORA_SPIRV_AS_EXECUTABLE spirv-as REQUIRED)
+    set(NYXORA_TRIANGLE_VERTEX_SPV ${CMAKE_CURRENT_BINARY_DIR}/triangle.vert.spv)
+    set(NYXORA_TRIANGLE_FRAGMENT_SPV ${CMAKE_CURRENT_BINARY_DIR}/triangle.frag.spv)
+    add_custom_command(
+        OUTPUT ${NYXORA_TRIANGLE_VERTEX_SPV} ${NYXORA_TRIANGLE_FRAGMENT_SPV}
+        COMMAND ${NYXORA_SPIRV_AS_EXECUTABLE} --target-env vulkan1.1
+                ${PROJECT_SOURCE_DIR}/tests/shaders/triangle.vert.spvasm
+                -o ${NYXORA_TRIANGLE_VERTEX_SPV}
+        COMMAND ${NYXORA_SPIRV_AS_EXECUTABLE} --target-env vulkan1.1
+                ${PROJECT_SOURCE_DIR}/tests/shaders/triangle.frag.spvasm
+                -o ${NYXORA_TRIANGLE_FRAGMENT_SPV}
+        DEPENDS tests/shaders/triangle.vert.spvasm tests/shaders/triangle.frag.spvasm
+        VERBATIM
+    )
+    add_custom_target(nyxora_vulkan_triangle_shaders
+        DEPENDS ${NYXORA_TRIANGLE_VERTEX_SPV} ${NYXORA_TRIANGLE_FRAGMENT_SPV})
+    add_executable(nyxora_vulkan_triangle tools/vulkan_triangle.cpp)
+    add_dependencies(nyxora_vulkan_triangle nyxora_vulkan_triangle_shaders)
+    target_compile_features(nyxora_vulkan_triangle PRIVATE cxx_std_20)
+    target_link_libraries(nyxora_vulkan_triangle PRIVATE NyxoraRT::core Vulkan::Vulkan)
     add_executable(nyxora_vulkan_scalar tools/vulkan_scalar_runner.cpp)
     target_compile_features(nyxora_vulkan_scalar PRIVATE cxx_std_20)
     target_link_libraries(nyxora_vulkan_scalar PRIVATE Vulkan::Vulkan)
     if(MSVC)
+        target_compile_options(nyxora_vulkan_triangle PRIVATE /W4 /permissive-)
         target_compile_options(nyxora_vulkan_scalar PRIVATE /W4 /permissive-)
         if(NYXORA_ENABLE_WERROR)
             target_compile_options(nyxora_vulkan_scalar PRIVATE /WX)
+            target_compile_options(nyxora_vulkan_triangle PRIVATE /WX)
         endif()
     else()
+        target_compile_options(nyxora_vulkan_triangle PRIVATE -Wall -Wextra -Wpedantic)
         target_compile_options(nyxora_vulkan_scalar PRIVATE -Wall -Wextra -Wpedantic)
         if(NYXORA_ENABLE_WERROR)
             target_compile_options(nyxora_vulkan_scalar PRIVATE -Werror)
+            target_compile_options(nyxora_vulkan_triangle PRIVATE -Werror)
         endif()
     endif()
 endif()
@@ -149,6 +173,12 @@ if(NYXORA_BUILD_TESTS)
         add_test(NAME nyxora_vector_conformance
             COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/vector_conformance.py
                     $<TARGET_FILE:nyxora> ${NYXORA_SPIRV_VAL_EXECUTABLE})
+        if(TARGET nyxora_vulkan_triangle)
+            add_test(NAME nyxora_vulkan_triangle_conformance
+                COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/triangle_conformance.py
+                        $<TARGET_FILE:nyxora_vulkan_triangle>
+                        ${NYXORA_TRIANGLE_VERTEX_SPV} ${NYXORA_TRIANGLE_FRAGMENT_SPV})
+        endif()
         if(TARGET nyxora_vulkan_scalar)
             add_test(NAME nyxora_vulkan_scalar_conformance
                 COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/spirv_conformance.py
