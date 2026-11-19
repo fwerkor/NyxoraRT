@@ -1,0 +1,20 @@
+; Synthetic diagnostic triangle fragment shader: solid red.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %color
+OpExecutionMode %main OriginUpperLeft
+OpDecorate %color Location 0
+%void = OpTypeVoid
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%fn = OpTypeFunction %void
+%ptr_out = OpTypePointer Output %v4float
+%color = OpVariable %ptr_out Output
+%zero = OpConstant %float 0
+%one = OpConstant %float 1
+%red = OpConstantComposite %v4float %one %zero %zero %one
+%main = OpFunction %void None %fn
+%entry = OpLabel
+OpStore %color %red
+OpReturn
+OpFunctionEnd

@@ -1,0 +1,38 @@
+; Synthetic diagnostic triangle vertex shader using VertexIndex.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %main "main" %vertexIndex %position
+OpDecorate %vertexIndex BuiltIn VertexIndex
+OpDecorate %position BuiltIn Position
+%void = OpTypeVoid
+%bool = OpTypeBool
+%v4bool = OpTypeVector %bool 4
+%int = OpTypeInt 32 1
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%fn = OpTypeFunction %void
+%ptr_in_int = OpTypePointer Input %int
+%ptr_out_vec = OpTypePointer Output %v4float
+%vertexIndex = OpVariable %ptr_in_int Input
+%position = OpVariable %ptr_out_vec Output
+%zero_int = OpConstant %int 0
+%one_int = OpConstant %int 1
+%negative = OpConstant %float -0.75
+%positive = OpConstant %float 0.75
+%zero = OpConstant %float 0
+%one = OpConstant %float 1
+%left = OpConstantComposite %v4float %negative %negative %zero %one
+%right = OpConstantComposite %v4float %positive %negative %zero %one
+%top = OpConstantComposite %v4float %zero %positive %zero %one
+%main = OpFunction %void None %fn
+%entry = OpLabel
+%index = OpLoad %int %vertexIndex
+%is_left = OpIEqual %bool %index %zero_int
+%is_right = OpIEqual %bool %index %one_int
+%right_mask = OpCompositeConstruct %v4bool %is_right %is_right %is_right %is_right
+%left_mask = OpCompositeConstruct %v4bool %is_left %is_left %is_left %is_left
+%if_right = OpSelect %v4float %right_mask %right %top
+%choice = OpSelect %v4float %left_mask %left %if_right
+OpStore %position %choice
+OpReturn
+OpFunctionEnd
