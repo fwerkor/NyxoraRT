@@ -49,6 +49,7 @@ add_library(nyxora_core
     src/gpu/pm4_trace.cpp
     src/gpu/guest_resources.cpp
     src/gpu/shader/isa.cpp
+    src/gpu/shader/scalar_decode.cpp
     src/runtime/runtime.cpp
     src/hle/libkernel.cpp
 )
@@ -104,6 +105,7 @@ if(NYXORA_BUILD_TESTS)
         tests/pm4_trace_tests.cpp
         tests/gpu_guest_resources_tests.cpp
         tests/shader_isa_tests.cpp
+        tests/shader_scalar_decode_tests.cpp
     )
     target_link_libraries(nyxora_tests PRIVATE NyxoraRT::core)
     add_test(NAME nyxora_tests COMMAND nyxora_tests)
