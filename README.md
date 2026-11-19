@@ -34,7 +34,7 @@ The initial framework already provides:
 - a Windows x64 HLE bridge that remaps up to seven SysV integer/pointer arguments to MS-x64, including guest stack arguments, and switches C++ host calls back to the suspended OS thread stack instead of running substantial host code on the guest stack;
 - a bounds-checked PM4 command frontend that transactionally validates submissions, tracks Type0 plus CONFIG/CONTEXT/SH/UCONFIG register state, separates graphics/compute shader banks, normalizes `NUM_INSTANCES`, `INDEX_TYPE`, `DRAW_INDEX_AUTO`, `DRAW_INDEX_2`, and `DISPATCH_DIRECT` into typed commands, discovers VS/PS/CS program addresses and resource words from SH state at command time, snapshots raw index format and index-buffer address for indexed draws, and models the verified VGT_INDEX_TYPE indexed-UCONFIG write, and feeds the same normalized stream to the deterministic null backend;
 - a deterministic PM4 trace replay CLI that validates headerless little-endian captures and emits structured JSON with full-precision guest addresses, independent of a Vulkan driver;
-- a protected, bounded guest-GPU memory snapshot helper for mapped index buffers and shader words, plus a strict SOPP-only scalar shader control-flow decoder for synthetic programs;
+- a protected, bounded guest-GPU memory snapshot helper for mapped index buffers and shader words, plus an initial typed AMD scalar decoder, literal-aware control-flow graph, bounded reference execution and narrowly restricted diagnostic SPIR-V compute generation;
 - unit tests and CI-ready CMake/CTest targets.
 
 ```bash
@@ -65,7 +65,12 @@ raw shader binary can be inspected with:
 ./build/nyxora --shader-sopp ./path/to/shader.bin
 ```
 
-This outputs decoded control-flow metadata as JSON, not executable SPIR-V.
+This outputs decoded control-flow metadata as JSON. The newer scalar frontend also
+supports `--shader-scalar`, `--shader-cfg`, `--shader-exec` and a tightly limited
+`--shader-spv <shader.bin> <output.spv>` mode that emits independently validated
+Vulkan 1.1 compute SPIR-V for straight-line scalar ALU operations only. See
+[Scalar frontend and SPIR-V diagnostics](docs/scalar-frontend.md) for supported
+encodings, reference semantics, test commands and non-goals.
 
 ## Near-term roadmap
 
