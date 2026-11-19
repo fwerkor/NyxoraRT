@@ -27,6 +27,9 @@ jobs:
       - name: Install coverage tooling
         run: python3 -m pip install --disable-pip-version-check gcovr==8.6
 
+      - name: Install SPIR-V validator
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq spirv-tools
+
       - name: Configure coverage build
         run: >-
           cmake -S . -B build-coverage

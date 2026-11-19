@@ -115,4 +115,12 @@ if(NYXORA_BUILD_TESTS)
     )
     target_link_libraries(nyxora_tests PRIVATE NyxoraRT::core)
     add_test(NAME nyxora_tests COMMAND nyxora_tests)
+
+    find_package(Python3 QUIET COMPONENTS Interpreter)
+    find_program(NYXORA_SPIRV_VAL_EXECUTABLE spirv-val)
+    if(Python3_Interpreter_FOUND AND NYXORA_SPIRV_VAL_EXECUTABLE)
+        add_test(NAME nyxora_spirv_conformance
+            COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/spirv_conformance.py
+                    $<TARGET_FILE:nyxora> ${NYXORA_SPIRV_VAL_EXECUTABLE})
+    endif()
 endif()
