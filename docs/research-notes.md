@@ -75,6 +75,10 @@ An opt-in Vulkan SDK target now dispatches the restricted scalar SPIR-V kernel o
 
 A strict VOP1/VOP2 decoder now handles an initial integer vector ALU subset and 9-bit VGPR/inline/literal operands, rejecting unmodeled SGPR/wave/modifier instructions. The CPU reference models 256 VGPRs across 32 independently seeded lanes. The Vulkan diagnostic generator emits a 32-invocation workgroup using LocalInvocationIndex to index an 8192-word host-coherent storage buffer. An independent seeded 32-program Python oracle checks full per-lane CPU and actual Lavapipe GPU outputs; each emitted module passes Khronos spirv-val. This remains diagnostic parallel compute, not PS5 graphics rendering.
 
+## PM4-to-Vulkan headless rasterization milestone
+
+An opt-in Vulkan graphics diagnostic now accepts exactly one normalized PM4 DRAW_INDEX_AUTO with three vertices, executes a fixed-shader RGBA8 render pass, transitions the color image for transfer, copies pixels into a host-coherent buffer and serializes a 64×64 PPM. On Mesa Lavapipe, a synthetic red triangle yielded a red center and black corner pixels (1152 red pixels). The test rejects malformed/unsupported PM4 traces. This is real graphics rasterization but *not* guest shader translation, game rendering or the normal backend; the vertex/fragment SPIR-V are fixed original tests.
+
 ## Implemented runtime-linker milestone
 
 The first implementation derived only format and architectural facts from the references, then reimplemented the behavior independently. NyxoraRT now parses SCE dynamic-table offsets from `PT_SCE_DYNLIBDATA`, decodes packed module/library identifiers, models PT_TLS metadata, applies the core x86-64 RELA forms used by the references, and keeps unresolved imports retryable.

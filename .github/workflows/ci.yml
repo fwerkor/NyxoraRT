@@ -34,7 +34,7 @@ jobs:
         run: |
           ICD=$(find /usr/share/vulkan/icd.d -maxdepth 1 -name 'lvp_icd*.json' -print -quit)
           test -n "$ICD"
-          VK_ICD_FILENAMES="$ICD" ctest --test-dir build-vulkan -R '^nyxora_vulkan_(scalar|vector)_conformance$' --output-on-failure
+          VK_ICD_FILENAMES="$ICD" ctest --test-dir build-vulkan -R '^nyxora_vulkan_(scalar|vector|triangle)_conformance$' --output-on-failure
 
   coverage:
     runs-on: ubuntu-latest
