@@ -35,6 +35,7 @@ The initial framework already provides:
 - a bounds-checked PM4 command frontend that transactionally validates submissions, tracks Type0 plus CONFIG/CONTEXT/SH/UCONFIG register state, separates graphics/compute shader banks, normalizes `NUM_INSTANCES`, `INDEX_TYPE`, `DRAW_INDEX_AUTO`, `DRAW_INDEX_2`, and `DISPATCH_DIRECT` into typed commands, discovers VS/PS/CS program addresses and resource words from SH state at command time, snapshots raw index format and index-buffer address for indexed draws, and models the verified VGT_INDEX_TYPE indexed-UCONFIG write, and feeds the same normalized stream to the deterministic null backend;
 - a deterministic PM4 trace replay CLI that validates headerless little-endian captures and emits structured JSON with full-precision guest addresses, independent of a Vulkan driver;
 - a protected, bounded guest-GPU memory snapshot helper for mapped index buffers and shader words, plus an initial typed AMD scalar decoder, literal-aware control-flow graph, bounded reference execution and narrowly restricted diagnostic SPIR-V compute generation;
+- an **opt-in headless Vulkan scalar diagnostic runner** that executes the restricted compute SPIR-V on a real Vulkan device and compares full SGPR/SCC output against independent reference tests (no graphics presentation or guest GPU scheduling);
 - unit tests and CI-ready CMake/CTest targets.
 
 ```bash
@@ -70,7 +71,9 @@ supports `--shader-scalar`, `--shader-cfg`, `--shader-exec` and a tightly limite
 `--shader-spv <shader.bin> <output.spv>` mode that emits independently validated
 Vulkan 1.1 compute SPIR-V for straight-line scalar ALU operations only. See
 [Scalar frontend and SPIR-V diagnostics](docs/scalar-frontend.md) for supported
-encodings, reference semantics, test commands and non-goals.
+encodings, reference semantics, test commands and non-goals. The optional
+[Vulkan scalar diagnostic runner](docs/vulkan-scalar-diagnostic.md) provides
+an end-to-end compute dispatch and 32-case semantic regression suite.
 
 ## Near-term roadmap
 

@@ -67,6 +67,10 @@ The memory bridge now checks `GuestAddressSpace` region readability/commitment a
 
 A typed scalar decoder now recognizes narrowly whitelisted SOP1/SOP2/SOPC/SOPK/SOPP operations, with explicit literal dwords and instruction-boundary branch targets. Its CFG tracks reachable/unreachable blocks and loops; the CPU reference interpreter validates SGPR/SCC arithmetic and bounded control flow, deliberately rejecting unmodeled wave synchronization. The first Vulkan SPIR-V emitter translates **straight-line scalar ALU only** to a one-invocation compute kernel writing a host-provided 103-element SGPR/SCC storage buffer. Generated Vulkan 1.1–1.3 binaries were independently validated with Khronos spirv-val; CTest optionally runs a seeded 32-case semantic and module validation corpus. This remains a diagnostic stage, not a production GPU translator.
 
+## Headless Vulkan diagnostic execution milestone
+
+An opt-in Vulkan SDK target now dispatches the restricted scalar SPIR-V kernel on a real Vulkan compute device, with one 103-element host-coherent storage buffer containing SGPR[0..101] and SCC. A shader-write to host-read barrier precedes queue completion and host inspection. On a Mesa Lavapipe device, 32/32 seeded programs matched an independent Python reference for **every** SGPR value and SCC. A separate Ubuntu GitHub Actions job builds and tests this path. This does not implement graphics, PS5 shader effects, queue scheduling, or resource mapping.
+
 ## Implemented runtime-linker milestone
 
 The first implementation derived only format and architectural facts from the references, then reimplemented the behavior independently. NyxoraRT now parses SCE dynamic-table offsets from `PT_SCE_DYNLIBDATA`, decodes packed module/library identifiers, models PT_TLS metadata, applies the core x86-64 RELA forms used by the references, and keeps unresolved imports retryable.

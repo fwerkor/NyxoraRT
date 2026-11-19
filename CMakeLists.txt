@@ -141,5 +141,11 @@ if(NYXORA_BUILD_TESTS)
         add_test(NAME nyxora_spirv_conformance
             COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/spirv_conformance.py
                     $<TARGET_FILE:nyxora> ${NYXORA_SPIRV_VAL_EXECUTABLE})
+        if(TARGET nyxora_vulkan_scalar)
+            add_test(NAME nyxora_vulkan_scalar_conformance
+                COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/spirv_conformance.py
+                        $<TARGET_FILE:nyxora> ${NYXORA_SPIRV_VAL_EXECUTABLE}
+                        $<TARGET_FILE:nyxora_vulkan_scalar>)
+        endif()
     endif()
 endif()

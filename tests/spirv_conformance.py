@@ -90,7 +90,7 @@ def make_program(rng, length):
     return code, regs, int(scc)
 
 
-def main(executable, validator):
+def main(executable, validator, vulkan_runner=None):
     rng = random.Random(20261119)
     with tempfile.TemporaryDirectory(prefix="nyxora-spirv-") as temp:
         root = Path(temp)
@@ -109,6 +109,10 @@ def main(executable, validator):
             run(executable, "--shader-spv", str(source_path), str(output_path))
             assert output_path.read_bytes()[:4] == b"\x03\x02\x23\x07"
             run(validator, "--target-env", "vulkan1.1", str(output_path))
+            if vulkan_runner:
+                result = json.loads(run(vulkan_runner, str(output_path)).stdout)
+                assert result["sgpr"] == expected_registers, f"Vulkan case {count}: SGPR mismatch"
+                assert result["scc"] == expected_scc, f"Vulkan case {count}: SCC mismatch"
 
         # Branches are valid CFGs but cannot be translated as straight-line ALU.
         source_path.write_bytes(struct.pack("<2I", 0xBF820000, 0xBF810000))
@@ -117,10 +121,11 @@ def main(executable, validator):
         output_path.unlink(missing_ok=True)
         rejected = run(executable, "--shader-spv", str(source_path), str(output_path), ok=False)
         assert rejected.returncode != 0 and not output_path.exists()
-    print("32 deterministic scalar programs: CPU state and SPIR-V validation passed")
+    print("32 deterministic scalar programs: CPU, SPIR-V" +
+          (", Vulkan execution" if vulkan_runner else "") + " conformance passed")
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        raise SystemExit("usage: spirv_conformance.py NYXORA_BINARY SPIRV_VAL_BINARY")
-    main(sys.argv[1], sys.argv[2])
+    if len(sys.argv) not in (3, 4):
+        raise SystemExit("usage: spirv_conformance.py NYXORA_BINARY SPIRV_VAL_BINARY [VULKAN_RUNNER]")
+    main(sys.argv[1], sys.argv[2], sys.argv[3] if len(sys.argv) == 4 else None)
