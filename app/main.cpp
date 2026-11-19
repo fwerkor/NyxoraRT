@@ -14,6 +14,7 @@
 #include "nyxora/gpu/shader/scalar_cfg.hpp"
 #include "nyxora/gpu/shader/scalar_exec.hpp"
 #include "nyxora/gpu/shader/spirv.hpp"
+#include "nyxora/gpu/shader/vector.hpp"
 #include "nyxora/runtime/runtime.hpp"
 
 namespace {
@@ -25,7 +26,11 @@ void usage() {
               << "       nyxora --shader-scalar <shader.bin>\n"
               << "       nyxora --shader-cfg <shader.bin>\n"
               << "       nyxora --shader-exec <shader.bin>\n"
-              << "       nyxora --shader-spv <shader.bin> <output.spv>\n";
+              << "       nyxora --shader-spv <shader.bin> <output.spv>\n"
+              << "       nyxora --shader-valu <shader.bin>\n"
+              << "       nyxora --shader-valu-exec <shader.bin>\n"
+              << "       nyxora --shader-valu-exec-seeded <shader.bin>\n"
+              << "       nyxora --shader-valu-spv <shader.bin> <output.spv>\n";
 }
 
 } // namespace
@@ -40,7 +45,9 @@ int main(int argc, char** argv) {
         if (argc == 3) {
             const auto mode = std::string_view(argv[1]);
             if (mode != "--shader-sopp" && mode != "--shader-scalar" &&
-                mode != "--shader-cfg" && mode != "--shader-exec") {
+                mode != "--shader-cfg" && mode != "--shader-exec" &&
+                mode != "--shader-valu" && mode != "--shader-valu-exec" &&
+                mode != "--shader-valu-exec-seeded") {
                 usage();
                 return 2;
             }
@@ -49,6 +56,27 @@ int main(int argc, char** argv) {
                 throw std::runtime_error("could not open shader bytecode file");
             }
             const auto words = nyxora::gpu::pm4::read_binary_trace(file, 65536U);
+            if (mode == "--shader-valu" || mode == "--shader-valu-exec" ||
+                mode == "--shader-valu-exec-seeded") {
+                const auto program = nyxora::gpu::shader::decode_vector_program(words);
+                if (!program) {
+                    throw std::runtime_error("unsupported or invalid vector shader program");
+                }
+                if (mode == "--shader-valu") {
+                    nyxora::gpu::shader::write_vector_program_json(std::cout, *program);
+                } else {
+                    const auto initial = mode == "--shader-valu-exec-seeded"
+                        ? nyxora::gpu::shader::make_seeded_vector_state()
+                        : nyxora::gpu::shader::VectorMachineState{};
+                    const auto state = nyxora::gpu::shader::execute_vector_program(*program,
+                                                                                   initial);
+                    if (!state) {
+                        throw std::runtime_error("vector program cannot execute in reference mode");
+                    }
+                    nyxora::gpu::shader::write_vector_state_json(std::cout, *state);
+                }
+                return 0;
+            }
             if (mode == "--shader-sopp") {
                 const auto program = nyxora::gpu::shader::decode_sopp_program(words);
                 if (!program) {
@@ -81,19 +109,28 @@ int main(int argc, char** argv) {
             return 0;
         }
         if (argc == 4) {
-            if (std::string_view(argv[1]) == "--shader-spv") {
+            const auto mode = std::string_view(argv[1]);
+            if (mode == "--shader-spv" || mode == "--shader-valu-spv") {
                 std::ifstream file(argv[2], std::ios::binary);
                 if (!file) {
                     throw std::runtime_error("could not open shader bytecode file");
                 }
                 const auto words = nyxora::gpu::pm4::read_binary_trace(file, 65536U);
-                const auto program = nyxora::gpu::shader::decode_scalar_program(words);
-                if (!program) {
-                    throw std::runtime_error("unsupported or invalid scalar shader program");
+                std::optional<std::vector<std::uint32_t>> spirv;
+                if (mode == "--shader-valu-spv") {
+                    const auto program = nyxora::gpu::shader::decode_vector_program(words);
+                    if (program) {
+                        spirv = nyxora::gpu::shader::compile_vector_diagnostic_spirv(*program);
+                    }
+                } else {
+                    const auto program = nyxora::gpu::shader::decode_scalar_program(words);
+                    if (program) {
+                        const auto cfg = nyxora::gpu::shader::build_scalar_cfg(*program);
+                        if (cfg) {
+                            spirv = nyxora::gpu::shader::compile_scalar_diagnostic_spirv(*cfg);
+                        }
+                    }
                 }
-                const auto cfg = nyxora::gpu::shader::build_scalar_cfg(*program);
-                const auto spirv = cfg ? nyxora::gpu::shader::compile_scalar_diagnostic_spirv(*cfg)
-                                       : std::nullopt;
                 if (!spirv) {
                     throw std::runtime_error("program cannot be lowered to diagnostic SPIR-V");
                 }

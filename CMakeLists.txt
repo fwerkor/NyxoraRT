@@ -54,6 +54,9 @@ add_library(nyxora_core
     src/gpu/shader/scalar_cfg.cpp
     src/gpu/shader/spirv.cpp
     src/gpu/shader/scalar_exec.cpp
+    src/gpu/shader/vector_decode.cpp
+    src/gpu/shader/vector_exec.cpp
+    src/gpu/shader/vector_spirv.cpp
     src/runtime/runtime.cpp
     src/hle/libkernel.cpp
 )
@@ -130,6 +133,8 @@ if(NYXORA_BUILD_TESTS)
         tests/shader_scalar_decode_tests.cpp
         tests/shader_scalar_cfg_tests.cpp
         tests/shader_spirv_tests.cpp
+        tests/shader_vector_tests.cpp
+        tests/shader_vector_spirv_tests.cpp
         tests/shader_scalar_exec_tests.cpp
     )
     target_link_libraries(nyxora_tests PRIVATE NyxoraRT::core)
@@ -141,9 +146,16 @@ if(NYXORA_BUILD_TESTS)
         add_test(NAME nyxora_spirv_conformance
             COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/spirv_conformance.py
                     $<TARGET_FILE:nyxora> ${NYXORA_SPIRV_VAL_EXECUTABLE})
+        add_test(NAME nyxora_vector_conformance
+            COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/vector_conformance.py
+                    $<TARGET_FILE:nyxora> ${NYXORA_SPIRV_VAL_EXECUTABLE})
         if(TARGET nyxora_vulkan_scalar)
             add_test(NAME nyxora_vulkan_scalar_conformance
                 COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/spirv_conformance.py
+                        $<TARGET_FILE:nyxora> ${NYXORA_SPIRV_VAL_EXECUTABLE}
+                        $<TARGET_FILE:nyxora_vulkan_scalar>)
+            add_test(NAME nyxora_vulkan_vector_conformance
+                COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/vector_conformance.py
                         $<TARGET_FILE:nyxora> ${NYXORA_SPIRV_VAL_EXECUTABLE}
                         $<TARGET_FILE:nyxora_vulkan_scalar>)
         endif()

@@ -71,6 +71,10 @@ A typed scalar decoder now recognizes narrowly whitelisted SOP1/SOP2/SOPC/SOPK/S
 
 An opt-in Vulkan SDK target now dispatches the restricted scalar SPIR-V kernel on a real Vulkan compute device, with one 103-element host-coherent storage buffer containing SGPR[0..101] and SCC. A shader-write to host-read barrier precedes queue completion and host inspection. On a Mesa Lavapipe device, 32/32 seeded programs matched an independent Python reference for **every** SGPR value and SCC. A separate Ubuntu GitHub Actions job builds and tests this path. This does not implement graphics, PS5 shader effects, queue scheduling, or resource mapping.
 
+## VOP1/VOP2 32-lane vector compute milestone
+
+A strict VOP1/VOP2 decoder now handles an initial integer vector ALU subset and 9-bit VGPR/inline/literal operands, rejecting unmodeled SGPR/wave/modifier instructions. The CPU reference models 256 VGPRs across 32 independently seeded lanes. The Vulkan diagnostic generator emits a 32-invocation workgroup using LocalInvocationIndex to index an 8192-word host-coherent storage buffer. An independent seeded 32-program Python oracle checks full per-lane CPU and actual Lavapipe GPU outputs; each emitted module passes Khronos spirv-val. This remains diagnostic parallel compute, not PS5 graphics rendering.
+
 ## Implemented runtime-linker milestone
 
 The first implementation derived only format and architectural facts from the references, then reimplemented the behavior independently. NyxoraRT now parses SCE dynamic-table offsets from `PT_SCE_DYNLIBDATA`, decodes packed module/library identifiers, models PT_TLS metadata, applies the core x86-64 RELA forms used by the references, and keeps unresolved imports retryable.
