@@ -63,6 +63,10 @@ A standalone binary PM4 reader with explicit little-endian decoding and a bounde
 
 The memory bridge now checks `GuestAddressSpace` region readability/commitment across adjacent mappings before copying index buffers or shader words. It decodes 8-, 16-, and 32-bit VGT_INDEX_TYPE data with no host-endianness assumptions; those raw values were checked against Mesa gfx103 register definitions. A strict initial AMD RDNA SOPP decoder recognizes a limited scalar control-flow subset, preserving signed branch targets and rejecting all unknown/unsupported encodings. Its one-word-only program constraint is intentional, because real shaders need mixed-width decode and full IR translation. An end-to-end synthetic PM4 fixture validates shader-address discovery, memory readback and scalar decoding without a GPU.
 
+## Typed scalar frontend and validated SPIR-V diagnostic milestone
+
+A typed scalar decoder now recognizes narrowly whitelisted SOP1/SOP2/SOPC/SOPK/SOPP operations, with explicit literal dwords and instruction-boundary branch targets. Its CFG tracks reachable/unreachable blocks and loops; the CPU reference interpreter validates SGPR/SCC arithmetic and bounded control flow, deliberately rejecting unmodeled wave synchronization. The first Vulkan SPIR-V emitter translates **straight-line scalar ALU only** to a one-invocation compute kernel writing a host-provided 103-element SGPR/SCC storage buffer. Generated Vulkan 1.1–1.3 binaries were independently validated with Khronos spirv-val; CTest optionally runs a seeded 32-case semantic and module validation corpus. This remains a diagnostic stage, not a production GPU translator.
+
 ## Implemented runtime-linker milestone
 
 The first implementation derived only format and architectural facts from the references, then reimplemented the behavior independently. NyxoraRT now parses SCE dynamic-table offsets from `PT_SCE_DYNLIBDATA`, decodes packed module/library identifiers, models PT_TLS metadata, applies the core x86-64 RELA forms used by the references, and keeps unresolved imports retryable.

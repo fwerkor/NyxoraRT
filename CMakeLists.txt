@@ -51,6 +51,7 @@ add_library(nyxora_core
     src/gpu/shader/isa.cpp
     src/gpu/shader/scalar_decode.cpp
     src/gpu/shader/scalar_cfg.cpp
+    src/gpu/shader/spirv.cpp
     src/gpu/shader/scalar_exec.cpp
     src/runtime/runtime.cpp
     src/hle/libkernel.cpp
@@ -109,6 +110,7 @@ if(NYXORA_BUILD_TESTS)
         tests/shader_isa_tests.cpp
         tests/shader_scalar_decode_tests.cpp
         tests/shader_scalar_cfg_tests.cpp
+        tests/shader_spirv_tests.cpp
         tests/shader_scalar_exec_tests.cpp
     )
     target_link_libraries(nyxora_tests PRIVATE NyxoraRT::core)
